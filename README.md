@@ -644,37 +644,41 @@ must know that **this specific human** approved **this exact transaction**.
 ## Security model
 
 We remove one risk: **no seed phrase and no separate EOA signing key is required**, so there is no
-such key to steal, leak, export or phish. Optional passkeys and NFC cards are still signing keys.
-The other risks move. This table lists them.
+such key to steal, leak, export or phish. Optional passkeys are still signing keys. The other
+risks move. This table lists them.
 
 | Threat | Result | Our defense | Remaining risk |
 |---|---|---|---|
 | A malicious frontend shows one transaction and asks for a proof for another. World App does not decode transactions. | An attacker gets a proof for their own transaction. | Caps. The delay queue for every sensitive action. | **Remains.** A trusted approval surface that decodes the transaction independently would fix it. |
 | Someone controls the owner's phone and World App | They can make valid World ID proofs. | Daily limits. Delays. Other methods can cancel. | Immediate spending under the daily limit. |
-| World ID recovery or reset | If recovery keeps the nullifier, whoever passes World's recovery can approve. If a reset changes the nullifier, World ID stops working for this account. | The fallback owner change with two distinct other methods and a 7-day delay. | An account with World ID only has no fallback. |
-| A downgrade attack with a weaker method | A stolen method tries to remove the stronger ones. | Module and rule changes need World ID and a delay. Configuration functions are not entry points. | Policy enforcement and bypass resistance remain unverified. |
-| A removed credential leaves a queued action behind | The action could run after the credential is gone. | The configuration version invalidates every queued action and collected approval. | Unverified until built. |
-| An inauthentic or stale root from the publisher | A fabricated root alone does not give the owner's credential. | A pinned source. | **We trust the publisher** for authenticity, freshness and revocation. |
-| The root publisher stops | World ID approvals stop. | Source change with two distinct other methods and a 7-day delay. | An account with World ID only freezes. |
-| The alternative mempool is not available | Transactions that need the larger budget cannot be sent. | Passkey transfers aim to stay under the public mempool cap. | Not measured yet. |
+| World ID recovery or reset | If recovery keeps the nullifier, whoever passes World's recovery can approve. If a reset changes the nullifier, World ID stops working for this account. | The fallback owner change with two distinct device-bound methods and a 7-day delay. | An account with World ID only has no fallback. An account with only synced passkeys has none either. |
+| A downgrade attack with a weaker method | A stolen method tries to remove the stronger ones. | Module and rule changes need World ID and a delay. Configuration functions are not entry points. | Tests pass on the local stack. No audit has checked bypass resistance. |
+| A stolen method burns the ETH balance as gas fees | The ETH goes to the block producer. The spending rules do not see it. | `verify` limits the fee per gas and the total cost of one transaction. | Repeated transactions up to the limit, until the owner removes the method. |
+| A removed credential leaves a queued action behind | The action could run after the credential is gone. | The configuration version invalidates every queued action and collected approval. | Tests pass on the local stack. No audit. |
+| An inauthentic or stale root from the publisher | A fabricated root alone does not give the owner's credential. | A pinned source. | **We trust the publisher** for authenticity, freshness and revocation. The publisher route does not check a root. |
+| The root publisher stops | World ID approvals stop. | Source change with two distinct device-bound methods and a 7-day delay. | An account with World ID only freezes. |
+| The alternative mempool is not available | Transactions that need the larger budget cannot be sent. | Passkey `VERIFY` frames use about 30k to 50k gas, under the 100k cap. | The stock sidecar still rejects passkeys, because they call precompiles. World ID transactions cannot be sent without a changed sidecar. |
 | A bad or buggy validator module | A module runs with full control of the account (`DELEGATECALL`). | Install only reviewed modules. Changes need World ID and a delay. | Module bugs. |
 | Dapps that ask for offchain signatures (ERC-1271, permits, sign-in) | The prototype cannot sign them. | None yet. | Some dapps will not work. |
 | Coercion | The owner is forced to approve. | Delays on sensitive actions. | Immediate spending under the daily limit. |
+| A stolen agent credential (planned feature) | The attacker can act as the agent. | The agent's budget and permissions. The owner can revoke at once. | Spending up to the budget before the owner revokes. |
+| A wallet that falsely names our main wallet as owner (planned feature) | It can look like one of our agent wallets. | The app lists only the agent wallets that the main wallet recorded. | Other apps can still show the false wallet. |
 
 ## CROPS
 
 - **C (censorship resistance):** The wallet depends on a World ID root publisher and on
   alternative-mempool nodes. If our publisher stops, roots expire after 8191 slots. The owner can
-  move to another publisher with two distinct other methods, after a 7-day delay. Anyone can run a
-  publisher.
+  move to another publisher with two distinct device-bound methods, after a 7-day delay. Anyone
+  can run a publisher.
 - **O (open source):** The code is under the MIT license. A user can build and run everything from
   this repo.
 - **P (privacy):** A World ID proof reveals no name and no biometric data. The nullifier is
   specific to our app and action, so it does not link the owner across apps. Our servers see no
-  identity. RPC reads go through **TODO** (we plan to test Anon-RPC).
+  identity. The test identity is the exception: the server makes that proof, so it sees the test
+  secrets. RPC reads go through **TODO** (we plan to test Anon-RPC).
 - **S (security):** No seed phrase and no separate EOA signing key is required. Optional passkeys
-  and NFC cards are signing keys. Each proof signs one exact transaction. We trust the World ID protocol, the configured root publisher and the verifier
-  contract. See the security model.
+  are signing keys. Each proof signs one exact transaction. We trust the World ID protocol, the
+  configured root publisher and the verifier contract. See the security model.
 
 ## Demo (3 minutes)
 
