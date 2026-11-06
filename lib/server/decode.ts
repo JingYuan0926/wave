@@ -4,7 +4,7 @@ import { decodeAbiParameters, decodeFunctionData, numberToHex, size, slice, type
 import type { DecodedAction, MethodRef, PasskeySlot, TokenInfo } from '../api-types'
 import { ETH_TOKEN, PASSKEY_SLOTS } from '../api-types'
 import type { Deployment } from '../chain'
-import { AGENT_BIT, decodeBatch, SMALL_TIER, WORLD_BIT, type Call } from '../policy'
+import { AGENT_BIT, decodeBatch, NO_LIMIT, OWNER_BIT, SMALL_TIER, type Call } from '../policy'
 import { formatDuration, formatPeriod, plainAmount, shortHex } from '../ui/format'
 import { TestUSDCAbi, WaveAccountAbi } from '../wave-abi'
 import { ApiFailure } from './http'
@@ -67,7 +67,7 @@ export function transferOf(call: Call): TransferFacts | null {
 
 const methodNames = (mask: number): string => {
   const names: string[] = []
-  if (mask & WORLD_BIT) names.push('World ID')
+  if (mask & OWNER_BIT) names.push('Owner method')
   for (const slot of PASSKEY_SLOTS) if (mask & (1 << slot)) names.push(`Passkey ${slot}`)
   if (mask & AGENT_BIT) names.push('Agent key')
   return names.length > 0 ? names.join(', ') : 'no method'
@@ -79,13 +79,19 @@ function tierLine(tier: RawTier, index: number, token: TokenInfo | undefined) {
   const unit = (value: bigint) =>
     token ? `${plainAmount(value, token.decimals)} ${token.symbol}` : value.toString()
   const parts = [
-    `up to ${unit(tier.upTo)}`,
+    tier.upTo >= NO_LIMIT ? 'any amount' : `up to ${unit(tier.upTo)}`,
     methodNames(tier.methods),
     tier.delay > 0 ? `${formatDuration(tier.delay).toLowerCase()} delay` : 'no delay',
-    tier.cap > 0n ? `${unit(tier.cap)} per ${formatPeriod(tier.period)}` : 'no cap',
+    tier.cap > 0n ? `${unit(tier.cap)} per ${formatPeriod(tier.period)}` : 'no total limit',
   ]
-  if (tier.methods & SMALL_TIER) parts.push('small')
-  return { label: `Tier ${index + 1}`, value: parts.join(', ') }
+  if (tier.methods & SMALL_TIER) parts.push('a synced passkey can approve')
+  return { label: `Limit ${index + 1}`, value: parts.join(', ') }
+}
+
+/** The hard daily total in a rule change. */
+function dailyLine(limit: bigint, token: TokenInfo | undefined) {
+  const value = token ? `${plainAmount(limit, token.decimals)} ${token.symbol}` : limit.toString()
+  return { label: 'Most per day', value: limit > 0n ? value : 'no daily limit' }
 }
 
 type AgentCall = { fn: string; args: readonly unknown[] }
@@ -248,11 +254,11 @@ export function describeConfig(d: Deployment, data: Hex): DecodedAction {
       }
     }
     case 'setTiers': {
-      const [address, tiers] = decoded.args
+      const [address, tiers, dailyLimit] = decoded.args
       const token = tokenOf(d, address)
       return {
         title: `Change ${token?.symbol ?? shortHex(address)} rules`,
-        lines: tiers.map((tier, index) => tierLine(tier, index, token)),
+        lines: [...tiers.map((tier, index) => tierLine(tier, index, token)), dailyLine(dailyLimit, token)],
         warning: 'This change makes the rules looser, so it waits in the queue.',
       }
     }
@@ -262,6 +268,14 @@ export function describeConfig(d: Deployment, data: Hex): DecodedAction {
         lines: [{ label: 'New owner', value: numberToHex(decoded.args[0], { size: 32 }), mono: true }],
         warning: 'The new World ID takes control of this wallet.',
       }
+    case 'setOwnerKey': {
+      const initData = decoded.args[0]
+      return {
+        title: 'Change the owner passkey',
+        lines: [{ label: 'New public key x', value: size(initData) >= 32 ? slice(initData, 0, 32) : initData, mono: true }],
+        warning: 'The new passkey takes control of this wallet.',
+      }
+    }
     case 'setRootSource':
       return {
         title: 'Change the World ID root source',
@@ -281,8 +295,9 @@ export function describeConfig(d: Deployment, data: Hex): DecodedAction {
 export function describeCalls(d: Deployment, account: Address, calls: readonly Call[]): DecodedAction {
   if (calls.length === 1) return describeCall(d, account, calls[0])
   const parts = calls.map((call) => describeCall(d, account, call))
+  const removal = parts.find((part) => part.title.startsWith('Remove passkey'))
   return {
-    title: `${calls.length} calls`,
+    title: removal ? `${removal.title}, and change limits` : `${calls.length} calls`,
     lines: parts.flatMap((part, index) => [
       { label: `Call ${index + 1}`, value: part.title },
       ...part.lines.map((line) => ({ ...line, label: `Call ${index + 1} ${line.label}` })),
@@ -342,14 +357,14 @@ function readSender(d: Deployment, account: Address, data: Hex): FrameFacts {
       }
     }
     case 'tighten': {
-      const [address, tiers] = decoded.args
+      const [address, tiers, dailyLimit] = decoded.args
       const token = tokenOf(d, address)
       return {
         fn: 'tighten',
         calls: [],
         decoded: {
           title: `Tighten ${token?.symbol ?? shortHex(address)} rules`,
-          lines: tiers.map((tier, index) => tierLine(tier, index, token)),
+          lines: [...tiers.map((tier, index) => tierLine(tier, index, token)), dailyLine(dailyLimit, token)],
         },
       }
     }

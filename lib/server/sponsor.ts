@@ -18,6 +18,8 @@ export const SPONSOR_MAX_FEE = 10_000_000_000n
 export const SPONSOR_MAX_COST = 50_000_000_000_000_000n
 /** A new account costs state gas under EIP-8037, on top of the execution gas. */
 const DEPLOY_GAS = 1_500_000n
+/** The setup writes about 16 new slots at 97,920 state gas each. Measured in scripts/e2e.ts. */
+const DEPLOY_SETUP_GAS = 6_000_000n
 
 const FRAME_VERIFY = 1
 const FRAME_SENDER = 2
@@ -123,7 +125,8 @@ export async function sponsorView(d: Deployment, address: Address): Promise<Spon
 
 /**
  * Deploys a wallet with a plain transaction, so the wallet needs no ETH. CREATE2 commits the
- * address to the clone args, so this key cannot change who owns the wallet.
+ * address to the clone args, and they hold the setup hash. So this key cannot change who owns
+ * the wallet or which extra methods it has.
  */
 export async function deployWallet(account: Address, frame: DeployFrame): Promise<void> {
   await withDevKey(async () => {
@@ -135,9 +138,9 @@ export async function deployWallet(account: Address, frame: DeployFrame): Promis
       data: encodeFunctionData({
         abi: WaveAccountFactoryAbi,
         functionName: 'createAccount',
-        args: [frame.implementation, frame.args, frame.salt],
+        args: [frame.implementation, frame.args, frame.salt, frame.setup],
       }),
-      gas: DEPLOY_GAS,
+      gas: frame.setup === '0x' ? DEPLOY_GAS : DEPLOY_SETUP_GAS,
       ...LEGACY_TX,
     })
     const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 120_000 })

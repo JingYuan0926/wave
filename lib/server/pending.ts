@@ -1,5 +1,6 @@
 // The delay queue, read from logs and account storage. Server side only.
 import type { Address, Hex } from 'viem'
+import { appliedDelay } from '../account'
 import type { MethodRef, PendingAction, PendingKind, PendingStatus } from '../api-types'
 import { PASSKEY_SLOTS } from '../api-types'
 import { publicClient, type Deployment } from '../chain'
@@ -121,11 +122,7 @@ export async function readPending(
       const recovery = row.kind === KIND_RECOVERY
       const kind = await kindOf(account, recovery, calls)
       // A recovery delay starts at the second approval, not at the proposal.
-      const applied = recovery
-        ? limit > 0
-          ? Math.min(RECOVERY_DELAY, limit)
-          : RECOVERY_DELAY
-        : row.notBefore - row.createdAt
+      const applied = recovery ? appliedDelay(RECOVERY_DELAY, limit) : row.notBefore - row.createdAt
       const realDelay = await realDelayOf(account, kind, calls, applied)
 
       let status: PendingStatus
@@ -143,7 +140,7 @@ export async function readPending(
         executeAfter: row.notBefore > 0 ? row.notBefore : null,
         realDelay,
         appliedDelay: applied,
-        cancelBy: recovery ? 'world' : 'any',
+        cancelBy: recovery ? 'owner' : 'any',
       }
       return action
     }),

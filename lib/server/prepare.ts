@@ -1,7 +1,8 @@
 // POST /api/tx/prepare: turns an action into a frame transaction with a placeholder witness.
 // Server side only.
 import { encodeFunctionData, keccak256, numberToHex, type Address, type Hex } from 'viem'
-import { cloneArgs, DEFAULT_DEMO_DELAY } from '../account'
+import { NO_WAIT, cloneArgs } from '../account'
+import { tiersAfterRemoval } from '../limits'
 import type {
   AgentAdminOp,
   AgentRule,
@@ -51,6 +52,7 @@ import {
   passkeyInitData,
   scheduleData,
   setOwnerCall,
+  setOwnerKeyCall,
   setRootSourceCall,
   setTiersCall,
   SMALL_TIER,
@@ -61,7 +63,7 @@ import {
   type Call,
   type Tier as RawTier,
 } from '../policy'
-import { delayText } from '../ui/format'
+import { delayText, formatDuration } from '../ui/format'
 import { TestUSDCAbi, WaveAccountAbi, WaveAccountFactoryAbi } from '../wave-abi'
 import { agentSigner } from './agent-key'
 import { describeCall, describeCalls, describeSender, frameViews, methodOf, tokensOf, validatorOf } from './decode'
@@ -70,7 +72,10 @@ import { CONFIG_DELAY, KIND_RECOVERY, RECOVERY_DELAY, STATUS_COLLECTING, queuedS
 import { decodeCallError, prepareRejection, type Decoded } from './reject'
 import { normalizeRoot, referenceFor } from './roots'
 import { deployWallet, sponsorGate } from './sponsor'
+import { checkPlan, demoDelay, plannedWallet, type PlannedWallet } from './wallet-plan'
 import { externalNullifier, latestWorldRoot, worldConfig } from './world-config'
+
+export { demoDelay }
 
 /** executeScheduled runs the stored calls, and they can write many new slots. */
 const RUN_SCHEDULED_GAS = { execution: 1_500_000n, state: 3_000_000n }
@@ -88,16 +93,14 @@ const UINT32_MAX = 0xffff_ffff
 const UINT24_MAX = 0xff_ffff
 const BURN_ADDRESS: Address = '0x000000000000000000000000000000000000dEaD'
 
-export const demoDelay = (): number => Number(process.env.WAVE_DEMO_DELAY ?? DEFAULT_DEMO_DELAY)
-
 /** The onchain tier word holds the small flag in bit 7. */
 export function toRawTier(tier: Tier, row: number): RawTier {
-  const name = `tier ${row + 1}`
+  const name = `limit ${row + 1}`
   return {
     upTo: asBaseUnits(tier?.upTo, `${name} upTo`, UINT96_MAX),
     cap: asBaseUnits(tier?.cap, `${name} cap`, UINT96_MAX),
     delay: asInt(tier?.delay, `${name} delay`, UINT32_MAX),
-    period: asInt(tier?.period, `${name} period`, UINT24_MAX),
+    period: asInt(tier?.period, `${name} time span`, UINT24_MAX),
     methods: (asInt(tier?.methods, `${name} methods`, 0xff) & 0x7f) | (tier?.small ? SMALL_TIER : 0),
   }
 }
@@ -106,6 +109,9 @@ function rawTiers(tiers: unknown): RawTier[] {
   if (!Array.isArray(tiers)) throw new ApiFailure('BAD_REQUEST', 'The action needs a tiers list.')
   return (tiers as Tier[]).map(toRawTier)
 }
+
+/** A missing value is an error here, because 0 would remove a limit. */
+const dailyLimitOf = (value: unknown): bigint => asBaseUnits(value, 'The daily limit', UINT96_MAX)
 
 function checkMethod(method: MethodRef): MethodRef {
   if (method?.kind === 'world') return method
@@ -119,29 +125,16 @@ const passkeyValidator = (d: Deployment, slot: PasskeySlot): Address => {
   return d.passkeyValidators[slot - 1]
 }
 
-/** The DEFAULT frame of the first transaction. The address must match the deployment input. */
-async function deployFrame(d: Deployment, account: Address, input: TxPrepareRequest['deployment']): Promise<DeployFrame> {
+/** The wallet of the first transaction. The address must match the deployment input. */
+async function plannedDeploy(d: Deployment, account: Address, input: TxPrepareRequest['deployment']): Promise<PlannedWallet> {
   if (!input) {
     throw new ApiFailure('NOT_DEPLOYED', 'The account has no code. The request needs `deployment`.')
   }
-  const args = cloneArgs({
-    worldIdValidator: d.worldIdValidator,
-    ownerNullifierHash: BigInt(asWord(input.ownerNullifierHash, 'ownerNullifierHash')),
-    externalNullifierHash: externalNullifier(),
-    rootSourceId: d.rootSourceId,
-    demoDelay: demoDelay(),
-  })
-  const salt = asHex(input.salt, 'salt', 32)
-  const predicted = await publicClient.readContract({
-    address: d.factory,
-    abi: WaveAccountFactoryAbi,
-    functionName: 'predict',
-    args: [d.implementation, args, salt],
-  })
-  if (predicted.toLowerCase() !== account.toLowerCase()) {
+  const planned = await plannedWallet(d, checkPlan(input, d))
+  if (planned.address.toLowerCase() !== account.toLowerCase()) {
     throw new ApiFailure('ACCOUNT_MISMATCH', 'This wallet was made for another deployment. Create a new wallet.')
   }
-  return { factory: d.factory, implementation: d.implementation, args, salt }
+  return planned
 }
 
 /** An agent wallet has no owner of its own. The address commits to its master and its salt. */
@@ -151,10 +144,13 @@ export async function agentDeployment(
   salt: Hex,
 ): Promise<{ address: Address; frame: DeployFrame }> {
   const args = cloneArgs({
-    worldIdValidator: d.worldIdValidator,
-    ownerNullifierHash: 0n,
-    externalNullifierHash: externalNullifier(),
-    rootSourceId: d.rootSourceId,
+    validator: d.worldIdValidator,
+    owner: {
+      kind: 'world',
+      ownerNullifierHash: 0n,
+      externalNullifierHash: externalNullifier(),
+      rootSourceId: d.rootSourceId,
+    },
     demoDelay: demoDelay(),
     master,
   })
@@ -164,7 +160,7 @@ export async function agentDeployment(
     functionName: 'predict',
     args: [d.implementation, args, salt],
   })
-  return { address, frame: { factory: d.factory, implementation: d.implementation, args, salt } }
+  return { address, frame: { factory: d.factory, implementation: d.implementation, args, salt, setup: '0x' } }
 }
 
 export type Plan = {
@@ -175,18 +171,29 @@ export type Plan = {
   ethOut?: bigint
   /** An agent wallet that must exist before this transaction runs. */
   deployChild?: { address: Address; frame: DeployFrame }
+  /** The action runs right after this approval, because the wallet has no wait. */
+  runAtOnce?: boolean
+  runActionId?: Hex
 }
 
 type Context = {
   d: Deployment
   account: Address
   validator: Address
+  /** The owner method of this account. */
+  owner: Address
   deployed: boolean
-  /** The delay limit of this account. Its address commits to the value. */
+  /** The chosen wait of this account, as the clone holds it. Its address commits to the value. */
   delayLimit: number
 }
 
+/** The server can run a queued action on the local network only. */
+const canRunAtOnce = (ctx: Context): boolean => ctx.delayLimit === NO_WAIT && sponsorOf(ctx.d) !== null
+
 const newSalt = (): Hex => keccak256(crypto.getRandomValues(new Uint8Array(32)))
+
+const isOwner = (ctx: Context): boolean => ctx.validator.toLowerCase() === ctx.owner.toLowerCase()
+const ownerIsWorld = (ctx: Context): boolean => ctx.owner.toLowerCase() === ctx.d.worldIdValidator.toLowerCase()
 
 const describe = (ctx: Context, data: Hex): DecodedAction => describeSender(ctx.d, ctx.account, data).decoded
 
@@ -197,7 +204,24 @@ function withDelay(ctx: Context, decoded: DecodedAction, real: number): DecodedA
 
 function queuedPlan(ctx: Context, calls: Call[], realDelay: number): Plan {
   const data = scheduleData(KIND_NORMAL, calls, newSalt())
-  return { route: 'schedule', sender: { data }, decoded: withDelay(ctx, describe(ctx, data), realDelay) }
+  const decoded = withDelay(ctx, describe(ctx, data), realDelay)
+  const runAtOnce = canRunAtOnce(ctx)
+  // A wallet with no wait has no queue step, so its review must not name one.
+  const warning = runAtOnce
+    ? decoded.warning?.replace(', so it waits in the queue', '').replace(' It waits in the queue.', '')
+    : decoded.warning
+  return { route: 'schedule', sender: { data }, decoded: { ...decoded, warning }, runAtOnce }
+}
+
+/** A tier delay is the owner's own rule. The chosen wait does not change it. */
+function tierDelayPlan(ctx: Context, call: Call, delay: number): Plan {
+  const data = scheduleData(KIND_NORMAL, [call], newSalt())
+  const decoded = describe(ctx, data)
+  return {
+    route: 'schedule',
+    sender: { data },
+    decoded: { ...decoded, lines: [...decoded.lines, { label: 'Delay', value: formatDuration(delay) }] },
+  }
 }
 
 /** A readable reason that needs no signature. A transfer that fails here costs no gas. */
@@ -235,7 +259,7 @@ async function transferPlan(ctx: Context, action: Extract<TxAction, { kind: 'tra
   const preview = await previewTransfer(ctx, token, amount)
   if (typeof preview !== 'number') return prepareRejection(preview)
   const call = transferCall(token, to, amount)
-  if (preview > 0) return queuedPlan(ctx, [call], preview)
+  if (preview > 0) return tierDelayPlan(ctx, call, preview)
   return {
     route: 'execute',
     sender: { data: executeData([call]) },
@@ -248,7 +272,11 @@ async function transferPlan(ctx: Context, action: Extract<TxAction, { kind: 'tra
  * Asks the chain with eth_call. The reason needs no signature and costs no gas. The newest block
  * can be a few seconds behind the clock. So a delay that the clock says is over waits for a block.
  */
-async function checkRunnable(ctx: Context, id: Hex, batch: Hex): Promise<Decoded | null> {
+export async function checkRunnable(
+  ctx: Pick<Context, 'd' | 'account'>,
+  id: Hex,
+  batch: Hex,
+): Promise<Decoded | null> {
   const lastTry = Date.now() + BLOCK_WAIT_MS
   for (;;) {
     try {
@@ -294,7 +322,7 @@ const readAccount = <T,>(ctx: Context, functionName: string, args: unknown[] = [
 /** The method bit for a recovery, or the rejection that the account would give. */
 async function recoveryBit(ctx: Context): Promise<number | Rejection> {
   const args = { validator: ctx.validator }
-  if (ctx.validator === ctx.d.worldIdValidator) return prepareRejection({ code: 'MethodNotAllowed', args })
+  if (isOwner(ctx)) return prepareRejection({ code: 'MethodNotAllowed', args })
   const bit = await readAccount<number>(ctx, 'methodBitOf', [ctx.validator])
   const synced = await readAccount<number>(ctx, 'syncedMask')
   return bit & synced ? prepareRejection({ code: 'SyncedNotAllowed', args }) : bit
@@ -302,7 +330,17 @@ async function recoveryBit(ctx: Context): Promise<number | Rejection> {
 
 function recoveryPlan(ctx: Context, change: RecoveryChange): Plan {
   let call: Call
-  if (change?.kind === 'owner') {
+  if (change?.kind === 'owner-key') {
+    if (ownerIsWorld(ctx)) throw new ApiFailure('BAD_REQUEST', 'The owner of this wallet is World ID, not a passkey.')
+    const { x, y } = change.publicKey ?? {}
+    if (typeof change.backupEligible !== 'boolean') {
+      throw new ApiFailure('BAD_REQUEST', 'The new passkey needs backupEligible.')
+    }
+    const init = passkeyInitData(asHex(x, 'public key x', 32), asHex(y, 'public key y', 32), change.backupEligible)
+    call = setOwnerKeyCall(ctx.account, init)
+  } else if (!ownerIsWorld(ctx)) {
+    throw new ApiFailure('BAD_REQUEST', 'The owner of this wallet is a passkey. Only a new passkey can replace it.')
+  } else if (change?.kind === 'owner') {
     const owner = BigInt(asWord(change.nullifierHash, 'new owner'))
     if (owner === 0n) throw new ApiFailure('BAD_REQUEST', 'The new owner is zero.')
     call = setOwnerCall(ctx.account, owner)
@@ -349,6 +387,9 @@ async function approveRecoveryPlan(ctx: Context, id: Hex): Promise<Plan | Reject
   return {
     route: 'approveRecovery',
     sender: { data: approveRecoveryData(id) },
+    // The proposal counted as the first approval, so this one queues the recovery.
+    runAtOnce: canRunAtOnce(ctx),
+    runActionId: id,
     decoded: withDelay(
       ctx,
       {
@@ -365,8 +406,8 @@ async function cancelPlan(ctx: Context, id: Hex): Promise<Plan | Rejection> {
   const { d, account } = ctx
   const source = await queuedSource(d, account, id)
   if (!source) return prepareRejection({ code: 'NotScheduled' })
-  if (source.kind === KIND_RECOVERY && ctx.validator !== d.worldIdValidator) {
-    return prepareRejection({ code: 'OnlyWorldId' })
+  if (source.kind === KIND_RECOVERY && !isOwner(ctx)) {
+    return prepareRejection({ code: 'OnlyOwnerMethod' })
   }
   const text = describeCalls(d, account, source.calls)
   return {
@@ -377,6 +418,30 @@ async function cancelPlan(ctx: Context, id: Hex): Promise<Plan | Rejection> {
       lines: [...text.lines, { label: 'Action', value: id, mono: true }],
     },
   }
+}
+
+/**
+ * A rule can name the removed method alone: an older rule, or a rule from a tighten. Such a rule
+ * changes in the same action, so no step ever has no approver.
+ */
+async function removePlan(ctx: Context, slot: PasskeySlot): Promise<Plan> {
+  const { d, account } = ctx
+  const validator = passkeyValidator(d, slot)
+  const removal = uninstallModuleCall(account, validator)
+  const bit = ctx.deployed ? await readAccount<number>(ctx, 'methodBitOf', [validator]) : 0
+  if (bit === 0) return queuedPlan(ctx, [removal], CONFIG_DELAY)
+  const [enrolled, synced] = await Promise.all([readAccount<number>(ctx, 'enrolledMask'), readAccount<number>(ctx, 'syncedMask')])
+  const repairs = await Promise.all(
+    tokensOf(d).map(async ({ address }) => {
+      const tiers = await readAccount<readonly RawTier[]>(ctx, 'tiersOf', [address])
+      const fixed = tiersAfterRemoval(tiers, bit, enrolled, synced)
+      if (!fixed) return []
+      // A method removal must not change the hard daily total.
+      const [dailyLimit] = await readAccount<readonly [bigint]>(ctx, 'dailyOf', [address])
+      return [setTiersCall(account, address, fixed, dailyLimit)]
+    }),
+  )
+  return queuedPlan(ctx, [...repairs.flat(), removal], CONFIG_DELAY)
 }
 
 function checkRules(rules: AgentRule[] | undefined): { token: Address; tiers: RawTier[] }[] {
@@ -417,8 +482,8 @@ const runNow = (ctx: Context, call: Call): Plan => ({
 async function agentPlan(ctx: Context, action: Extract<TxAction, { kind: 'agent' }>): Promise<Plan | Rejection> {
   const agent = asAddress(action.agent, 'agent')
   const { op } = action
-  const worldOnly = op?.kind === 'create' || op?.kind === 'unpause' || op?.kind === 'set-tiers' || op?.kind === 'set-key'
-  if (worldOnly && ctx.validator !== ctx.d.worldIdValidator) {
+  const ownerOnly = op?.kind === 'create' || op?.kind === 'unpause' || op?.kind === 'set-tiers' || op?.kind === 'set-key'
+  if (ownerOnly && !isOwner(ctx)) {
     return prepareRejection({ code: 'MethodNotAllowed', args: { validator: ctx.validator } })
   }
   if (op?.kind === 'create') return agentCreatePlan(ctx, agent, op)
@@ -465,15 +530,15 @@ async function planAction(ctx: Context, action: TxAction): Promise<Plan | Reject
       return queuedPlan(ctx, [installModuleCall(account, passkeyValidator(d, action.slot), init)], CONFIG_DELAY)
     }
     case 'remove-passkey':
-      return queuedPlan(ctx, [uninstallModuleCall(account, passkeyValidator(d, action.slot))], CONFIG_DELAY)
+      return removePlan(ctx, action.slot)
     case 'set-rules':
       return queuedPlan(
         ctx,
-        [setTiersCall(account, asAddress(action.token, 'token'), rawTiers(action.tiers))],
+        [setTiersCall(account, asAddress(action.token, 'token'), rawTiers(action.tiers), dailyLimitOf(action.dailyLimit))],
         CONFIG_DELAY,
       )
     case 'tighten': {
-      const data = tightenData(asAddress(action.token, 'token'), rawTiers(action.tiers))
+      const data = tightenData(asAddress(action.token, 'token'), rawTiers(action.tiers), dailyLimitOf(action.dailyLimit))
       return { route: 'tighten', sender: { data }, decoded: describe(ctx, data) }
     }
     case 'cancel':
@@ -537,30 +602,43 @@ export async function prepareTx(body: TxPrepareRequest): Promise<TxPrepareRespon
   const validator = validatorOf(d, method)
 
   const code = await publicClient.getCode({ address: account })
-  const deployed = code !== undefined && code !== '0x'
-  const firstDeploy = deployed ? undefined : await deployFrame(d, account, body.deployment)
+  let deployed = code !== undefined && code !== '0x'
+  const planned = deployed ? null : await plannedDeploy(d, account, body.deployment)
+  const firstDeploy = planned?.frame
 
-  const enrolled = deployed
-    ? (await publicClient.readContract({
+  const enrolled = planned
+    ? planned.validators.some((item) => item.toLowerCase() === validator.toLowerCase())
+    : (await publicClient.readContract({
         address: account,
         abi: WaveAccountAbi,
         functionName: 'methodBitOf',
         args: [validator],
       })) !== 0
-    : method.kind === 'world'
   if (!enrolled) {
     return { ok: false, rejection: prepareRejection({ code: 'NotEnrolled', args: { validator } }) }
   }
 
+  const sponsor = sponsorOf(d)
+  // A wallet with extra methods has rules. The rule check must read them from the chain, so the
+  // wallet deploys first. An abandoned review leaves a deployed wallet with no funds at risk.
+  if (sponsor && firstDeploy && firstDeploy.setup !== '0x') {
+    const refused = await sponsorGate(sponsor, account)
+    if (refused) return { ok: false, rejection: prepareRejection(refused) }
+    await deployWallet(account, firstDeploy)
+    deployed = true
+  }
+
+  const owner = planned
+    ? planned.owner
+    : await publicClient.readContract({ address: account, abi: WaveAccountAbi, functionName: 'ownerValidator' })
   const delayLimit = deployed
     ? await publicClient.readContract({ address: account, abi: WaveAccountAbi, functionName: 'demoDelay' })
-    : demoDelay()
-  const plan = await planAction({ d, account, validator, deployed, delayLimit }, body.action)
+    : (planned as PlannedWallet).demoDelay
+  const plan = await planAction({ d, account, validator, owner, deployed, delayLimit }, body.action)
   if (!isPlan(plan)) return { ok: false, rejection: plan }
 
   // On the local network the sponsor deploys the wallet with a plain transaction. A deploy frame
   // does not fit the state gas limit of the prefix: DEVIATIONS.md gives the numbers.
-  const sponsor = sponsorOf(d)
   if (sponsor) {
     const refused = await sponsorGate(sponsor, account)
     if (refused) return { ok: false, rejection: prepareRejection(refused) }
@@ -603,6 +681,8 @@ export async function prepareTx(body: TxPrepareRequest): Promise<TxPrepareRespon
       : null,
     deploys: deploy !== undefined,
     sponsored: sponsor !== null,
+    runAtOnce: plan.runAtOnce ?? false,
+    runActionId: plan.runActionId ?? null,
   }
 }
 

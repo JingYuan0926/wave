@@ -1,5 +1,5 @@
 // POST /api/tx/send and GET /api/tx/status. Server side only.
-import { decodeAbiParameters, decodeFunctionData, size, type Address, type Hex } from 'viem'
+import { decodeAbiParameters, decodeFunctionData, getAbiItem, size, toEventSelector, type Address, type Hex } from 'viem'
 import { initialOwnerOf, initialRootSourceOf } from '../account'
 import type { FrameView, Rejection, TxSendRequest, TxSendResponse, TxStatusResponse, TxState, TxWitness } from '../api-types'
 import { CHAIN_ID, RPC_URL, RpcError, SIDECAR_URL, publicClient, rpc, sleep, sponsorOf, type Deployment } from '../chain'
@@ -245,7 +245,17 @@ async function submit(tx: FrameTx, views: FrameView[], world: WorldFacts | undef
   if (!receipt) return { ok: true, txHash: hash, frames: views }
   const frames = frameStatus(views, receipt)
   if (isFailed(receipt)) return { ok: false, rejection: await chainRejection(hash, frames) }
-  return { ok: true, txHash: hash, frames }
+  return { ok: true, txHash: hash, frames, scheduledId: scheduledIdOf(tx, receipt) }
+}
+
+const SCHEDULED_TOPIC = toEventSelector(getAbiItem({ abi: WaveAccountAbi, name: 'Scheduled' }))
+
+/** The action that this transaction queued. Only the account itself can emit this log. */
+function scheduledIdOf(tx: FrameTx, receipt: TxReceipt): Hex | undefined {
+  const log = receipt.logs.find(
+    (item) => item.address.toLowerCase() === tx.sender.toLowerCase() && item.topics[0] === SCHEDULED_TOPIC,
+  )
+  return log?.topics[1]
 }
 
 type RpcFrame = { mode: Hex; to: Address | null; data: Hex }
