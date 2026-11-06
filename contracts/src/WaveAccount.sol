@@ -6,6 +6,7 @@ import {IERC8286FrameAccount} from "./interfaces/IERC8286FrameAccount.sol";
 import {IWaveMethod} from "./interfaces/IWaveMethod.sol";
 import {IWaveConfig, WaveTier} from "./interfaces/IWaveConfig.sol";
 import {IWaveAgent, AgentRule} from "./interfaces/IWaveAgent.sol";
+import {IWaveSetup, SetupMethod, SetupRule} from "./interfaces/IWaveSetup.sol";
 import {IERC7579Module, IERC7579ModuleConfig, IERC7579Execution, Execution} from "@openzeppelin/contracts/interfaces/draft-IERC7579.sol";
 import {ERC7579Utils} from "@openzeppelin/contracts/account/utils/draft-ERC7579Utils.sol";
 import {LibERC8286} from "./lib/LibERC8286.sol";
@@ -21,9 +22,11 @@ interface IERC20Transfer {
 /// @notice The WAVE account. Forked from the ERC-8286 playground account, contract route only.
 /// `nonce_keys[0]` names the validator. Validators run by DELEGATECALL in a VERIFY frame.
 /// Six selectors can start a SENDER frame. Configuration runs only from executeScheduled.
-/// An agent wallet is the same contract with a nonzero `master` clone arg. It has no World ID owner.
+/// The clone config names the owner method, World ID or a passkey. The ticked extra methods come
+/// from `setup`, which the factory calls once with bytes that the address commits to.
+/// An agent wallet is the same contract with a nonzero `master` clone arg. It has no owner method.
 /// Its master administers it through IWaveAgent, and its agent key acts through the spending tiers.
-contract WaveAccount is WavePolicy, IERC8286FrameAccount, IERC7579Execution, IWaveConfig, IWaveAgent {
+contract WaveAccount is WavePolicy, IERC8286FrameAccount, IERC7579Execution, IWaveConfig, IWaveAgent, IWaveSetup {
     bytes32 internal constant MODE_SINGLE = bytes32(0);
     bytes32 internal constant MODE_BATCH = bytes32(bytes1(0x01));
 
@@ -46,6 +49,9 @@ contract WaveAccount is WavePolicy, IERC8286FrameAccount, IERC7579Execution, IWa
 
     mapping(address => bool) private _installed;
 
+    /// @dev True after `setup` ran. It runs once.
+    bool private _setupDone;
+
     /// @dev Set only inside executeScheduled. TSTORE is legal here: this is not the prefix.
     bool private transient _inScheduled;
 
@@ -63,7 +69,9 @@ contract WaveAccount is WavePolicy, IERC8286FrameAccount, IERC7579Execution, IWa
     error AlreadyInstalled(address module);
     error NotInstalled(address module);
     error ModuleCallFailed(address module);
-    error CannotRemoveWorldId();
+    error CannotRemoveOwnerMethod();
+    error WrongOwnerKind();
+    error BadSetup();
     error ZeroValue();
     error NoExecutors();
     error NotMaster();
@@ -72,6 +80,7 @@ contract WaveAccount is WavePolicy, IERC8286FrameAccount, IERC7579Execution, IWa
     error WithdrawFailed();
 
     event OwnerChanged(uint256 ownerNullifierHash);
+    event OwnerKeyChanged(bytes initData);
     event RootSourceChanged(bytes32 sourceId);
     event AgentKeyChanged(address signer);
     event AgentPauseChanged(bool paused);
@@ -124,7 +133,7 @@ contract WaveAccount is WavePolicy, IERC8286FrameAccount, IERC7579Execution, IWa
         return LibERC8286.validatorFromNonceKey();
     }
 
-    function _worldId() internal view override returns (address) {
+    function _ownerValidator() internal view override returns (address) {
         return LibCloneConfig.validator(LibCloneConfig.args());
     }
 
@@ -149,7 +158,7 @@ contract WaveAccount is WavePolicy, IERC8286FrameAccount, IERC7579Execution, IWa
     // Validation
     // ---------------------------------------------------------------------
 
-    /// @dev World ID is always a method of a main wallet, and never a method of an agent wallet.
+    /// @dev The owner method is always a method of a main wallet. An agent wallet has no owner method.
     function isValidatorInstalled(address module) public view returns (bool) {
         if (_installed[module]) return true;
         bytes memory a = LibCloneConfig.args();
@@ -208,6 +217,26 @@ contract WaveAccount is WavePolicy, IERC8286FrameAccount, IERC7579Execution, IWa
     }
 
     // ---------------------------------------------------------------------
+    // First setup
+    // ---------------------------------------------------------------------
+
+    /// @dev The extra methods and first rules of a new wallet. The clone args hold the hash of
+    /// these bytes, so the address commits to them and a stranger who deploys cannot change them.
+    /// The factory calls this in the deploy call, and this function runs once. So anyone who
+    /// wants to add a method later must use the queue. No SENDER frame can reach this function.
+    function setup(SetupMethod[] calldata methods, SetupRule[] calldata rules) external {
+        if (_setupDone) revert AlreadySetUp();
+        bytes32 committed = LibCloneConfig.setupHash(LibCloneConfig.args());
+        if (committed == bytes32(0) || keccak256(msg.data[4:]) != committed) revert BadSetup();
+        _setupDone = true;
+        for (uint256 i; i < methods.length; i++) {
+            _install(methods[i].validator, methods[i].initData);
+            emit ModuleInstalled(LibERC8286.MODULE_TYPE_FRAME_VALIDATOR, methods[i].validator);
+        }
+        for (uint256 i; i < rules.length; i++) _setRules(rules[i].token, rules[i].tiers, rules[i].dailyLimit);
+    }
+
+    // ---------------------------------------------------------------------
     // SENDER entry points
     // ---------------------------------------------------------------------
 
@@ -238,8 +267,8 @@ contract WaveAccount is WavePolicy, IERC8286FrameAccount, IERC7579Execution, IWa
         _cancel(id);
     }
 
-    function tighten(address token, WaveTier[] calldata tiers) external onlySelf {
-        _tighten(token, tiers);
+    function tighten(address token, WaveTier[] calldata tiers, uint96 dailyLimit) external onlySelf {
+        _tighten(token, tiers, dailyLimit);
     }
 
     /// @dev Anyone can call this, also from a plain transaction. The stored hash, the delay
@@ -262,13 +291,17 @@ contract WaveAccount is WavePolicy, IERC8286FrameAccount, IERC7579Execution, IWa
         onlyScheduled
         onlyFrameValidator(moduleTypeId)
     {
+        _install(module, initData);
+        _bumpConfigVersion();
+        emit ModuleInstalled(moduleTypeId, module);
+    }
+
+    function _install(address module, bytes calldata initData) private {
         if (isValidatorInstalled(module)) revert AlreadyInstalled(module);
         _installed[module] = true;
         (bool ok,) = module.delegatecall(abi.encodeCall(IERC7579Module.onInstall, (initData)));
         if (!ok) revert ModuleCallFailed(module);
         _enroll(module, IWaveMethod(module).methodBit(), IWaveMethod(module).isSynced(initData));
-        _bumpConfigVersion();
-        emit ModuleInstalled(moduleTypeId, module);
     }
 
     function uninstallModule(uint256 moduleTypeId, address module, bytes calldata deInitData)
@@ -277,7 +310,7 @@ contract WaveAccount is WavePolicy, IERC8286FrameAccount, IERC7579Execution, IWa
         onlyScheduled
         onlyFrameValidator(moduleTypeId)
     {
-        if (module == _worldId()) revert CannotRemoveWorldId();
+        if (module == _ownerValidator()) revert CannotRemoveOwnerMethod();
         if (!_installed[module]) revert NotInstalled(module);
         _installed[module] = false;
         (bool ok,) = module.delegatecall(abi.encodeCall(IERC7579Module.onUninstall, (deInitData)));
@@ -287,19 +320,35 @@ contract WaveAccount is WavePolicy, IERC8286FrameAccount, IERC7579Execution, IWa
         emit ModuleUninstalled(moduleTypeId, module);
     }
 
-    function setTiers(address token, WaveTier[] calldata tiers) external onlyScheduled {
-        _setTiers(token, tiers);
+    function setTiers(address token, WaveTier[] calldata tiers, uint96 dailyLimit) external onlyScheduled {
+        _setRules(token, tiers, dailyLimit);
         _bumpConfigVersion();
     }
 
+    /// @dev World ID is the only validator with the owner bit as its own bit.
+    function _ownerIsWorldId() private view returns (bool) {
+        return IWaveMethod(_ownerValidator()).methodBit() == OWNER_BIT;
+    }
+
     function setOwner(uint256 ownerNullifierHash) external onlyScheduled {
+        if (!_ownerIsWorldId()) revert WrongOwnerKind();
         if (ownerNullifierHash == 0) revert ZeroValue();
         LibWaveIdentity.layout().ownerNullifier = ownerNullifierHash;
         _bumpConfigVersion();
         emit OwnerChanged(ownerNullifierHash);
     }
 
+    /// @dev A recovery of an owner passkey. The new key goes to storage and overrides the clone config.
+    function setOwnerKey(bytes calldata initData) external onlyScheduled {
+        if (_ownerIsWorldId()) revert WrongOwnerKind();
+        (bool ok,) = _ownerValidator().delegatecall(abi.encodeCall(IERC7579Module.onInstall, (initData)));
+        if (!ok) revert ModuleCallFailed(_ownerValidator());
+        _bumpConfigVersion();
+        emit OwnerKeyChanged(initData);
+    }
+
     function setRootSource(bytes32 sourceId) external onlyScheduled {
+        if (!_ownerIsWorldId()) revert WrongOwnerKind();
         if (sourceId == 0) revert ZeroValue();
         LibWaveIdentity.layout().rootSource = sourceId;
         _bumpConfigVersion();
@@ -399,8 +448,8 @@ contract WaveAccount is WavePolicy, IERC8286FrameAccount, IERC7579Execution, IWa
         return _isOwnAgent(target);
     }
 
-    function worldIdValidator() external view returns (address) {
-        return _worldId();
+    function ownerValidator() external view returns (address) {
+        return _ownerValidator();
     }
 
     function defaultToken() external view returns (address) {

@@ -2,20 +2,27 @@
 pragma solidity ^0.8.28;
 
 import {Clones} from "@openzeppelin/contracts/proxy/Clones.sol";
+import {IWaveSetup} from "./interfaces/IWaveSetup.sol";
 
 /// @notice Creates WAVE accounts as EIP-1167 clones with their configuration appended to their
-/// code (see LibCloneConfig). Creation writes no storage, so a DEFAULT frame can deploy an
-/// account inside the state gas budget of the validation prefix.
+/// code (see LibCloneConfig). An account with one method writes no storage at creation, so a
+/// DEFAULT frame can deploy it inside the state gas budget of the validation prefix.
+/// An account with extra methods commits to them with a hash in its args. This factory passes the
+/// setup bytes in the same call, so the account never exists without them.
 /// Forked from the ERC-8286 playground factory.
 contract WaveAccountFactory {
     event AccountCreated(address indexed account, address indexed implementation, bytes args, bytes32 salt);
 
     uint256 private constant ARGS_LEN = 123; // 27 header bytes + 96 initData bytes.
     uint256 private constant AGENT_ARGS_LEN = 143; // ARGS_LEN + 20 master bytes.
+    uint256 private constant SETUP_ARGS_LEN = 155; // ARGS_LEN + 32 setupHash bytes.
 
     modifier wellFormed(address implementation, bytes calldata args) {
         require(implementation.code.length != 0, "no implementation");
-        require(args.length == ARGS_LEN || args.length == AGENT_ARGS_LEN, "bad config length");
+        require(
+            args.length == ARGS_LEN || args.length == AGENT_ARGS_LEN || args.length == SETUP_ARGS_LEN,
+            "bad config length"
+        );
         require(address(bytes20(args[0:20])) != address(0), "validator required");
         require(uint8(args[20]) == 3, "scopes must be 3");
         require(uint8(args[22]) == 1, "contract route only");
@@ -28,7 +35,8 @@ contract WaveAccountFactory {
 
     /// @dev The same bytes that OpenZeppelin's cloneDeterministicWithImmutableArgs deploys.
     /// A bare CREATE2, because Create2.deploy uses SELFBALANCE, a banned opcode in the prefix.
-    function createAccount(address implementation, bytes calldata args, bytes32 salt)
+    /// `setup` must be empty unless the args hold a setup hash. Then it must match that hash.
+    function createAccount(address implementation, bytes calldata args, bytes32 salt, bytes calldata setup)
         external
         wellFormed(implementation, args)
         returns (address account)
@@ -45,6 +53,12 @@ contract WaveAccountFactory {
             account := create2(0, add(code, 0x20), mload(code), salt)
         }
         require(account != address(0), "create2 failed");
+        if (args.length == SETUP_ARGS_LEN) {
+            (bool ok,) = account.call(abi.encodePacked(IWaveSetup.setup.selector, setup));
+            require(ok, "setup refused");
+        } else {
+            require(setup.length == 0, "no setup hash");
+        }
         emit AccountCreated(account, implementation, args, salt);
     }
 
