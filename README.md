@@ -994,17 +994,36 @@ These are the last runs, on 2026-11-06, on the local stack.
 
 ## Open questions
 
-We will check these with the alternative-mempool team and the World team at the event:
+**Answered:**
 
-1. What validation gas cap does the devnet use? The EIP-8141 text says 100k for the public
-   mempool. The playground measured against a 500k cap on its own testnet.
-2. ERC-8286 cites `TXPARAM(0x0B)` for `nonce_keys[0]`. EIP-8250 and ethrex use `0x10`. We use `0x10`.
-3. Can `execute` read `TXPARAM(0x10)` in a `SENDER` frame?
-4. Are EIP-8272 recent roots live on the devnet we use?
-5. Which root will World's prover use, and can we get it before we build the transaction?
-6. Do World's test credentials at Mumbai produce World ID 3.0 proofs for onchain verification?
-7. How does IDKit encode the signal, so that our `hashToField` matches?
-8. Does a World ID nullifier stay the same after World ID recovery or reset?
+1. **What validation gas cap does the devnet use?** The stock sidecar has a flat 100k limit. Stake
+   does not change it. Our local sidecar uses 2.5M. See [the local devnet](#the-local-devnet).
+2. **ERC-8286 cites `TXPARAM(0x0B)` for `nonce_keys[0]`.** EIP-8250 and ethrex use `0x10`. We use
+   `0x10`, and it works on chain 1337.
+3. **Can `execute` read `TXPARAM(0x10)` in a `SENDER` frame?** Yes. The local chain ran this.
+4. **Are EIP-8272 recent roots live on the devnet we use?** Yes, in an early form. They are an
+   envelope field, not a `VERIFY` frame, at `0x…8272`.
+5. **Which root will World's prover use, and can we get it before we build the transaction?** No.
+   IDKit has no setting that pins a root. We use a root hint and allow one more scan.
+6. **How does IDKit encode the signal?** It decodes a `0x` hex string to bytes, then computes
+   `keccak256(bytes) >> 8`. We ran this on a 32-byte value, and it matches our Solidity.
+
+**Still open.** We will check these with the alternative-mempool team and the World team:
+
+1. Do World's test credentials at Mumbai produce World ID 3.0 proofs for onchain verification?
+   IDKit 4.6.0 has `orbLegacy`, but no scan has run through the simulator or World App.
+2. Does World App allow a second 3.0 proof for one action, with a new signal? **The main path
+   fails if it refuses**, because each approval is a new proof for `wave-approve`.
+3. Does the owner's World App account still give 3.0 proofs? If not, the error is
+   `world_id_3_not_available`.
+4. Does a World ID nullifier stay the same after World ID recovery or reset?
+5. How often does a real scan return a root other than the hint?
+6. Does `sandbox` return 3.0 proofs, and where is its root?
+7. Do Face ID and Touch ID report `BE=1` on real devices? Does their `clientDataJSON` fit the
+   512-byte witness?
+8. Will the public sidecars accept the precompile list and a higher budget?
+9. Will the public devnet keep this early EIP-8272 form? `verify` also reads `TXPARAM(0x04)` and
+   `TXPARAM(0x06)`, and the newer EIP text changes these.
 
 ## Prior art
 
