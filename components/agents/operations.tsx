@@ -12,6 +12,7 @@ import { explainRejection } from "@/lib/ui/rejections";
 import { useNow } from "@/lib/ui/use-now";
 
 const RECENT = 5;
+const RESULT_POLL_MS = 2000;
 
 function Countdown({ until }: { until: number }) {
   const now = useNow();
@@ -111,7 +112,7 @@ function RecentRow({ operation }: { operation: AgentOperationView }) {
         </p>
       ) : null}
       {operation.status === "expired" ? (
-        <p className="text-sm text-muted-foreground">The 5-minute window ended. The action did not run.</p>
+        <p className="text-sm text-muted-foreground">The 1-minute window ended. The action did not run.</p>
       ) : null}
       {operation.txHash && operation.explorerUrl ? (
         <a
@@ -158,20 +159,40 @@ export function ApprovalResult() {
   useEffect(() => {
     if (!attemptId) return;
     let active = true;
-    api
-      .agentPassStatus(attemptId)
-      .then((status) => {
-        if (active) setAttempt(status.attempt);
-      })
-      .catch(() => {
-        // The action list still shows the state of the action.
-      });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const read = () => {
+      api
+        .agentPassStatus(attemptId)
+        .then((status) => {
+          if (!active) return;
+          setAttempt(status.attempt);
+          // The server sends after the redirect, so the result comes a few seconds later.
+          if (status.attempt?.status === "running") timer = setTimeout(read, RESULT_POLL_MS);
+        })
+        .catch(() => {
+          // The action list still shows the state of the action.
+        });
+    };
+    read();
     return () => {
       active = false;
+      clearTimeout(timer);
     };
   }, [attemptId]);
 
-  if (!attempt || attempt.status !== "failed" || !attempt.reason) return null;
+  if (attempt?.status === "running") {
+    return <Notice title="World ID approved this">WAVE is sending the action now.</Notice>;
+  }
+  if (attempt?.status === "approved" && attempt.txHash && attempt.explorerUrl) {
+    return (
+      <Notice tone="success" title="World ID approved this, and the agent sent it">
+        <a href={attempt.explorerUrl} target="_blank" rel="noreferrer" className="break-all font-mono text-xs underline">
+          {attempt.txHash}
+        </a>
+      </Notice>
+    );
+  }
+  if (attempt?.status !== "failed" || !attempt.reason) return null;
   return (
     <Notice tone="warning" title="The approval did not pass">
       {REASONS[attempt.reason]}

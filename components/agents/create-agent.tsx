@@ -8,10 +8,11 @@ import { api } from "@/lib/api-client";
 import type { Address, AgentsResponse } from "@/lib/api-types";
 import { agentTier, limitError } from "@/lib/ui/agents";
 import { parseTokenAmount } from "@/lib/ui/format";
-import { WORLD_ID } from "@/lib/ui/rules";
+import { findPasskey } from "@/lib/ui/local";
+import { nameFor } from "@/lib/ui/rules";
 
 export function CreateAgent({ data, onChanged }: { data: AgentsResponse; onChanged: () => void }) {
-  const { account, info, tokenBy, offline } = useWallet();
+  const { account, info, tokenBy, offline, local, wallet } = useWallet();
   const [tokenAddress, setTokenAddress] = useState<string>(
     () => info?.tokens.find((token) => token.isTest)?.address ?? "",
   );
@@ -42,10 +43,16 @@ export function CreateAgent({ data, onChanged }: { data: AgentsResponse; onChang
         agent: address,
         op: { kind: "create", salt, rules: [{ token: token.address, tiers: [agentTier(draft, token)] }] },
       },
-      choices: requireMethod(account.methods, WORLD_ID, info.world),
-      method: WORLD_ID,
+      choices: requireMethod(account.methods, account.owner, info.world),
+      method: account.owner,
     });
   };
+
+  const ownerName = nameFor(
+    account.owner,
+    account.owner.kind === "passkey" && local && wallet ? findPasskey(local, wallet.address, account.owner.slot) : null,
+    info.world,
+  );
 
   const finish = async () => {
     setPerTransfer("");
@@ -64,7 +71,7 @@ export function CreateAgent({ data, onChanged }: { data: AgentsResponse; onChang
 
   return (
     <Card>
-      <SectionTitle hint="The same wallet and the same World ID approval as your main wallet. Your main wallet is its master.">
+      <SectionTitle hint="The same wallet as your main wallet, approved by your owner method. Your main wallet is its master.">
         Create an agent wallet
       </SectionTitle>
       <form className="flex flex-col gap-3" onSubmit={(event) => event.preventDefault()}>
@@ -110,10 +117,10 @@ export function CreateAgent({ data, onChanged }: { data: AgentsResponse; onChang
           autoComplete="off"
           inputMode="decimal"
           error={ask?.error ?? null}
-          hint="Above this amount, the agent waits for your World ID approval."
+          hint="Above this amount, the agent waits for a World ID login (Agent Pass). This needs World ID, also if your wallet has no World ID method."
         />
         <Button onClick={start} disabled={!ready || !data.next || !data.agentKey || offline}>
-          Create with World ID
+          Create with {ownerName}
         </Button>
       </form>
       {warning ? (

@@ -52,8 +52,8 @@ function Panel({ master }: { master: Address }) {
       {data.agents.map((agent, index) => (
         <AgentCard key={agent.address} agent={agent} name={`Agent ${index + 1}`} onChanged={changed} />
       ))}
-      <CreateAgent data={data} onChanged={changed} />
       <RecentActions operations={data.operations} />
+      <CreateAgent data={data} onChanged={changed} />
     </>
   );
 }

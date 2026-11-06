@@ -12,9 +12,9 @@ import type { AgentAdminOp, AgentSpendResponse, AgentView, TokenInfo, TxAction }
 import { agentTier, limitError } from "@/lib/ui/agents";
 import { formatAmount, parseTokenAmount, plainAmount } from "@/lib/ui/format";
 import { explainRejection } from "@/lib/ui/rejections";
-import { WORLD_ID, compareRules } from "@/lib/ui/rules";
+import { compareRules, changeTiming } from "@/lib/ui/rules";
 
-type Approve = (op: AgentAdminOp, who: "any" | "world", note?: string) => void;
+type Approve = (op: AgentAdminOp, who: "any" | "owner", note?: string) => void;
 
 function TokenSelect({
   tokens,
@@ -114,8 +114,8 @@ function LimitsForm({
     } else {
       approve(
         { kind: "set-tiers", token: token.address, tiers },
-        "world",
-        "Looser limits need World ID and wait in the queue on the Wallet page.",
+        "owner",
+        `Looser limits need the owner method. ${changeTiming(account?.waitSeconds ?? null, 172800)}`,
       );
     }
   };
@@ -169,7 +169,7 @@ function LimitsForm({
       {change && change.direction !== "same" ? (
         <Notice
           tone={change.direction === "looser" ? "warning" : "info"}
-          title={change.direction === "looser" ? "Looser: World ID and a delay" : "Stricter: applies at once"}
+          title={change.direction === "looser" ? "Looser: this needs the owner method" : "Stricter: applies at once"}
         >
           {change.changes.join(" ")}
         </Notice>
@@ -284,7 +284,14 @@ function SpendResult({ result }: { result: AgentSpendResponse }) {
     );
   }
   if (result.result === "rejected") {
-    const text = explainRejection(result.rejection);
+    // The general text sends the owner to Settings. The limits of an agent are on this card.
+    const text =
+      result.rejection.code === "NoTier"
+        ? {
+            title: "This is above the agent's limits",
+            detail: "The contract refused it. The amount is above the per transfer limit, or the daily limit is full.",
+          }
+        : explainRejection(result.rejection);
     return (
       <Notice tone="danger" title={text.title}>
         {text.detail}
@@ -398,8 +405,8 @@ export function AgentCard({
     setPanel(null);
     setSheetKey((key) => key + 1);
     setRequest(
-      who === "world"
-        ? { action, choices: requireMethod(account.methods, WORLD_ID, info?.world), method: WORLD_ID, note }
+      who === "owner"
+        ? { action, choices: requireMethod(account.methods, account.owner, info?.world), method: account.owner, note }
         : { action, choices: anyMethod(account.methods), method: single, note },
     );
   };
@@ -473,7 +480,7 @@ export function AgentCard({
             <Button
               variant="secondary"
               onClick={() =>
-                approve({ kind: "unpause" }, "world", "Unpause needs World ID and waits in the queue on the Wallet page.")
+                approve({ kind: "unpause" }, "owner", `Unpause needs the owner method. ${changeTiming(account.waitSeconds, 172800)}`)
               }
             >
               <Play aria-hidden="true" className="size-4" />
@@ -489,7 +496,7 @@ export function AgentCard({
             <Button
               variant="secondary"
               onClick={() =>
-                approve({ kind: "set-key" }, "world", "A new key needs World ID and waits in the queue on the Wallet page.")
+                approve({ kind: "set-key" }, "owner", `A new key needs the owner method. ${changeTiming(account.waitSeconds, 172800)}`)
               }
             >
               Set a new key
@@ -503,7 +510,15 @@ export function AgentCard({
         </div>
       </Card>
 
-      {panel === "fund" ? <SendFlow initialTo={agent.address} onClose={() => setPanel(null)} /> : null}
+      {panel === "fund" ? (
+        <SendFlow
+          initialTo={agent.address}
+          onClose={() => {
+            setPanel(null);
+            onChanged();
+          }}
+        />
+      ) : null}
       {panel === "limits" ? (
         <LimitsSheet agent={agent} approve={approve} onChanged={onChanged} onClose={() => setPanel(null)} />
       ) : null}
