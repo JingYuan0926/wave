@@ -1,0 +1,412 @@
+// SPDX-License-Identifier: CC0-1.0
+pragma solidity ^0.8.21;
+
+/// @notice ERC-8286 approval modes, SENDER-frame execution modes, and EIP-8141 frame
+/// introspection.
+/// @dev All functions are `internal`. The introspection wrappers need an EIP-8141-aware
+/// compiler and halt exceptionally outside a type-0x06 frame transaction.
+library LibERC8286 {
+    /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
+    /*                      APPROVAL MODES                        */
+    /*.•°:°.´+˚.*°.˚:*.´•*.+°.•°:´*.´•*.•°.•°:°.´:•˚°.*°.˚:*.´+°.•*/
+
+    /// @dev No approval scope.
+    uint8 internal constant APPROVE_NONE = 0x0;
+
+    /// @dev The account approves paying the transaction's total gas cost.
+    uint8 internal constant APPROVE_PAYMENT = 0x1;
+
+    /// @dev Approves later frames acting as `tx.sender`. Requires the frame's resolved
+    /// target to be `tx.sender`.
+    uint8 internal constant APPROVE_EXECUTION = 0x2;
+
+    /// @dev Both payment and execution.
+    uint8 internal constant APPROVE_EXECUTION_AND_PAYMENT = 0x3;
+
+    /// @dev Mask of the two meaningful scope bits.
+    uint8 internal constant APPROVE_SCOPE_MASK = 0x3;
+
+    /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
+    /*                        MODULE TYPES                        */
+    /*.•°:°.´+˚.*°.˚:*.´•*.+°.•°:´*.´•*.•°.•°:°.´:•˚°.*°.˚:*.´+°.•*/
+
+    /// @dev ERC-8286 frame validator module type id (TBD in the draft).
+    uint256 internal constant MODULE_TYPE_FRAME_VALIDATOR = 11;
+
+    /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
+    /*                     EXECUTION ROUTES                       */
+    /*.•°:°.´+˚.*°.˚:*.´•*.+°.•°:´*.´•*.•°.•°:°.´:•˚°.*°.˚:*.´+°.•*/
+
+    /// @dev SENDER frames call their targets directly; the account takes no part in
+    /// execution, so all policy is enforced at validation time.
+    uint8 internal constant EXECUTION_ROUTE_PROTOCOL = 0x00;
+
+    /// @dev Every SENDER frame targets the account, which dispatches through ERC-7579's
+    /// `execute`. Only a guarantee if `verify` checks `allSenderFramesTargetSelf`.
+    uint8 internal constant EXECUTION_ROUTE_CONTRACT = 0x01;
+
+    /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
+    /*                        FRAME MODES                         */
+    /*.•°:°.´+˚.*°.˚:*.´•*.+°.•°:´*.´•*.•°.•°:°.´:•˚°.*°.˚:*.´+°.•*/
+
+    /// @dev EIP-8141 frame modes, as returned by `FRAMEPARAM(i, 0x02)`.
+    uint256 internal constant MODE_DEFAULT = 0;
+    uint256 internal constant MODE_VERIFY = 1;
+    uint256 internal constant MODE_SENDER = 2;
+    uint256 internal constant MODE_POST_TX = 3;
+
+    /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
+    /*                     EXECUTION MODES                        */
+    /*.•°:°.´+˚.*°.˚:*.´•*.+°.•°:°.´:•˚°.*°.˚:*.´+°.•*.+°.•°:´*.•*/
+
+    /// @dev Exactly one SENDER frame.
+    bytes1 internal constant CALLTYPE_FRAME_SINGLE = 0x02;
+
+    /// @dev Multiple SENDER frames.
+    bytes1 internal constant CALLTYPE_FRAME_BATCH = 0x03;
+
+    /// @dev Revert-all: the frame is an atomic-batch member.
+    bytes1 internal constant EXECTYPE_DEFAULT = 0x00;
+
+    /// @dev Try: the frame is not in an atomic batch.
+    bytes1 internal constant EXECTYPE_TRY = 0x01;
+
+    /// @dev One standalone SENDER frame.
+    bytes32 internal constant FRAME_MODE_SINGLE =
+        0x0201000000000000000000000000000000000000000000000000000000000000;
+
+    /// @dev One SENDER frame inside an atomic batch.
+    bytes32 internal constant FRAME_MODE_SINGLE_ATOMIC =
+        0x0200000000000000000000000000000000000000000000000000000000000000;
+
+    /// @dev Multiple SENDER frames, reverting independently.
+    bytes32 internal constant FRAME_MODE_BATCH =
+        0x0301000000000000000000000000000000000000000000000000000000000000;
+
+    /// @dev Multiple SENDER frames in an atomic batch.
+    bytes32 internal constant FRAME_MODE_BATCH_ATOMIC =
+        0x0300000000000000000000000000000000000000000000000000000000000000;
+
+    /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
+    /*                      MODE OPERATIONS                       */
+    /*.•°:°.´+˚.*°.˚:*.´•*.+°.•°:´*.´•*.•°.•°:°.´:•˚°.*°.˚:*.´+°.•*/
+
+    /// @dev Encodes a mode per ERC-7579's layout: callType in byte 0, execType in byte 1,
+    /// every remaining byte zero.
+    function encodeFrameMode(bytes1 callType, bytes1 execType)
+        internal
+        pure
+        returns (bytes32 result)
+    {
+        assembly {
+            result := or(shl(248, byte(0, callType)), shl(240, byte(0, execType)))
+        }
+    }
+
+    /// @dev Returns the call type of the mode.
+    function getCallType(bytes32 mode) internal pure returns (bytes1) {
+        return bytes1(mode);
+    }
+
+    /// @dev Returns the exec type of the mode.
+    function getExecType(bytes32 mode) internal pure returns (bytes1) {
+        return mode[1];
+    }
+
+    /// @dev Whether `mode` is exactly one of the four frame modes. A mode carrying a
+    /// modeSelector or modePayload is not.
+    function isFrameMode(bytes32 mode) internal pure returns (bool) {
+        return mode == FRAME_MODE_SINGLE || mode == FRAME_MODE_SINGLE_ATOMIC
+            || mode == FRAME_MODE_BATCH || mode == FRAME_MODE_BATCH_ATOMIC;
+    }
+
+    /// @dev One bit per frame mode, for a configuration packed into a byte: single 0x1,
+    /// single-atomic 0x2, batch 0x4, batch-atomic 0x8. Zero for anything else.
+    function modeBit(bytes32 mode) internal pure returns (uint8) {
+        if (mode == FRAME_MODE_SINGLE) return 0x1;
+        if (mode == FRAME_MODE_SINGLE_ATOMIC) return 0x2;
+        if (mode == FRAME_MODE_BATCH) return 0x4;
+        if (mode == FRAME_MODE_BATCH_ATOMIC) return 0x8;
+        return 0;
+    }
+
+    /// @dev The mode for the given (batch, atomic) pair.
+    function frameMode(bool batch, bool atomic) internal pure returns (bytes32) {
+        if (atomic) return batch ? FRAME_MODE_BATCH_ATOMIC : FRAME_MODE_SINGLE_ATOMIC;
+        return batch ? FRAME_MODE_BATCH : FRAME_MODE_SINGLE;
+    }
+
+    /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
+    /*                  TRANSACTION INTROSPECTION                 */
+    /*.•°:°.´+˚.*°.˚:*.´•*.+°.•°:´*.´•*.•°.•°:°.´:•˚°.*°.˚:*.´+°.•*/
+
+    /// @dev `TXPARAM(0x01)`: the transaction's nonce.
+    function txNonce() internal view returns (uint256 result) {
+        assembly {
+            result := txparam(0x01)
+        }
+    }
+
+    /// @dev `TXPARAM(0x02)`: `tx.sender`. Masked, since assembly assignment to an address
+    /// does not clear the upper bits.
+    function txSender() internal view returns (address result) {
+        assembly {
+            result := and(txparam(0x02), 0xffffffffffffffffffffffffffffffffffffffff)
+        }
+    }
+
+    /// @dev `TXPARAM(0x04)`: the signed maximum fee per gas, on the ethrex devnet.
+    function maxFeePerGas() internal view returns (uint256 result) {
+        assembly {
+            result := txparam(0x04)
+        }
+    }
+
+    /// @dev `TXPARAM(0x06)`: the amount that APPROVE collects from the payer, on the ethrex
+    /// devnet: maximum fee per gas * total gas limit, plus the blob cost.
+    function maxCost() internal view returns (uint256 result) {
+        assembly {
+            result := txparam(0x06)
+        }
+    }
+
+    /// @dev `TXPARAM(0x08)`: the canonical signing hash. Commits frame data verbatim, so a
+    /// signature carried in frame data cannot sign over it; one in an `ARBITRARY` signature
+    /// entry with empty `msg` can, since those bytes are elided.
+    function sigHash() internal view returns (bytes32 result) {
+        assembly {
+            result := txparam(0x08)
+        }
+    }
+
+    /// @dev `TXPARAM(0x09)`: the number of frames.
+    function frameCount() internal view returns (uint256 result) {
+        assembly {
+            result := txparam(0x09)
+        }
+    }
+
+    /// @dev `TXPARAM(0x0A)`: the index of the executing frame.
+    function currentFrameIndex() internal view returns (uint256 result) {
+        assembly {
+            result := txparam(0x0a)
+        }
+    }
+
+    /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
+    /*                  KEYED NONCES (EIP-8250)                   */
+    /*.•°:°.´+˚.*°.˚:*.´•*.+°.•°:´*.´•*.•°.•°:°.´:•˚°.*°.˚:*.´+°.•*/
+
+    /// @dev `TXPARAM(0x0D)`: the sender's pre-state legacy nonce. (`0x0C` is EIP-8141's
+    /// `state_gas_left`.)
+    function legacyNonce() internal view returns (uint256 result) {
+        assembly {
+            result := txparam(0x0d)
+        }
+    }
+
+    /// @dev `TXPARAM(0x0E)`: `len(tx.nonce_keys)`.
+    function nonceKeyCount() internal view returns (uint256 result) {
+        assembly {
+            result := txparam(0x0e)
+        }
+    }
+
+    /// @dev `TXPARAM(0x0F)`: `keccak256(be32(len) || be32(k0) || ...)` over the key set.
+    function nonceKeysHash() internal view returns (bytes32 result) {
+        assembly {
+            result := txparam(0x0f)
+        }
+    }
+
+    /// @dev `TXPARAM(0x10)`: `tx.nonce_keys[0]`. Key `0` is the linear nonce; any other key
+    /// has its own sequence in the `NONCE_MANAGER` predeploy.
+    function nonceKey0() internal view returns (uint256 result) {
+        assembly {
+            result := txparam(0x10)
+        }
+    }
+
+    /// @dev The validator address in `nonce_keys[0]`. Zero for key `0`, and for any key with
+    /// bits above the low 160.
+    function validatorFromNonceKey() internal view returns (address) {
+        uint256 key = nonceKey0();
+        if (key == 0 || key >> 160 != 0) return address(0);
+        return address(uint160(key));
+    }
+
+    /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
+    /*                  SIGNATURE INTROSPECTION                   */
+    /*.•°:°.´+˚.*°.˚:*.´•*.+°.•°:´*.´•*.•°.•°:°.´:•˚°.*°.˚:*.´+°.•*/
+
+    /// @dev EIP-8141 `ARBITRARY` signature scheme: bytes the protocol does not check, left to
+    /// a contract. An entry with empty `msg` has its bytes elided from `sig_hash`.
+    uint256 internal constant SIG_SCHEME_ARBITRARY = 0x0;
+
+    /// @dev EIP-8141 `SECP256K1` signature scheme. The protocol checks the signature before any
+    /// frame runs.
+    uint256 internal constant SIG_SCHEME_SECP256K1 = 0x1;
+
+    /// @dev `TXPARAM(0x0B)`: `len(tx.signatures)`.
+    function signatureCount() internal view returns (uint256 result) {
+        assembly {
+            result := txparam(0x0b)
+        }
+    }
+
+    /// @dev `SIGPARAM(i, 0x01)`: entry `i`'s scheme. Halts if `i` is out of range.
+    function signatureScheme(uint256 i) internal view returns (uint256 result) {
+        assembly {
+            result := sigparam(i, 0x01)
+        }
+    }
+
+    /// @dev `SIGPARAM(i, 0x00)`: entry `i`'s resolved signer. Halts on an `ARBITRARY` entry.
+    function signatureSigner(uint256 i) internal view returns (address result) {
+        assembly {
+            result := and(sigparam(i, 0x00), 0xffffffffffffffffffffffffffffffffffffffff)
+        }
+    }
+
+    /// @dev `SIGPARAM(i, 0x02)`: entry `i`'s `msg`. Zero means that the entry signs `sig_hash`.
+    function signatureMsg(uint256 i) internal view returns (bytes32 result) {
+        assembly {
+            result := sigparam(i, 0x02)
+        }
+    }
+
+    /// @dev The raw bytes of `ARBITRARY` entry `i`, by `SIGPARAM(i, 0x03)` and `SIGDATACOPY`.
+    /// Empty if `i` is out of range or names another scheme, where the opcodes would halt.
+    function arbitrarySignature(uint256 i) internal view returns (bytes memory sig) {
+        if (i >= signatureCount() || signatureScheme(i) != SIG_SCHEME_ARBITRARY) return sig;
+        uint256 len;
+        assembly {
+            len := sigparam(i, 0x03)
+        }
+        sig = new bytes(len);
+        assembly ("memory-safe") {
+            sigdatacopy(add(sig, 0x20), 0, len, i)
+        }
+    }
+
+    /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
+    /*                     FRAME INTROSPECTION                    */
+    /*.•°:°.´+˚.*°.˚:*.´•*.+°.•°:´*.´•*.•°.•°:°.´:•˚°.*°.˚:*.´+°.•*/
+
+    /// @dev `FRAMEPARAM(i, 0x00)`: the frame's resolved target (`tx.sender` if empty).
+    function frameTarget(uint256 i) internal view returns (address result) {
+        assembly {
+            result := and(frameparam(i, 0x00), 0xffffffffffffffffffffffffffffffffffffffff)
+        }
+    }
+
+    /// @dev `FRAMEPARAM(i, 0x02)`: the frame's mode.
+    function frameModeOf(uint256 i) internal view returns (uint256 result) {
+        assembly {
+            result := frameparam(i, 0x02)
+        }
+    }
+
+    /// @dev `FRAMEPARAM(i, 0x03)`: the frame's flags.
+    function frameFlags(uint256 i) internal view returns (uint256 result) {
+        assembly {
+            result := frameparam(i, 0x03)
+        }
+    }
+
+    /// @dev `FRAMEPARAM(i, 0x04)`: `len(frame.data)`.
+    function frameDataLength(uint256 i) internal view returns (uint256 result) {
+        assembly {
+            result := frameparam(i, 0x04)
+        }
+    }
+
+    /// @dev `FRAMEPARAM(i, 0x06)`: the frame's allowed approval scope.
+    function allowedScope(uint256 i) internal view returns (uint8) {
+        uint256 result;
+        assembly {
+            result := frameparam(i, 0x06)
+        }
+        return uint8(result) & APPROVE_SCOPE_MASK;
+    }
+
+    /// @dev `FRAMEPARAM(i, 0x07)`: whether the frame carries the atomic-batch flag.
+    function atomicBatchFlag(uint256 i) internal view returns (bool result) {
+        uint256 flag;
+        assembly {
+            flag := frameparam(i, 0x07)
+        }
+        return flag == 1;
+    }
+
+    /// @dev `FRAMEPARAM(i, 0x08)`: the frame's value.
+    function frameValue(uint256 i) internal view returns (uint256 result) {
+        assembly {
+            result := frameparam(i, 0x08)
+        }
+    }
+
+    /// @dev `FRAMEDATACOPY`: the frame's data.
+    function frameData(uint256 i) internal view returns (bytes memory data) {
+        uint256 len = frameDataLength(i);
+        data = new bytes(len);
+        assembly ("memory-safe") {
+            framedatacopy(add(data, 0x20), 0, len, i)
+        }
+    }
+
+    /// @dev Whether frame `i` is in an atomic batch: it carries the flag, or frame `i - 1`
+    /// does (the group's terminating frame).
+    function inAtomicBatch(uint256 i) internal view returns (bool) {
+        if (atomicBatchFlag(i)) return true;
+        if (i == 0) return false;
+        return atomicBatchFlag(i - 1);
+    }
+
+    /// @dev The number of SENDER frames in the transaction.
+    function senderFrameCount() internal view returns (uint256 count) {
+        uint256 n = frameCount();
+        for (uint256 i = 0; i < n; i++) {
+            if (frameModeOf(i) == MODE_SENDER) count++;
+        }
+    }
+
+    /// @dev Whether every SENDER frame resolves to `address(this)`. A contract-dispatched
+    /// account MUST hold this before approving execution: one frame pointed elsewhere would
+    /// run as `tx.sender` past its `execute`.
+    function allSenderFramesTargetSelf() internal view returns (bool) {
+        uint256 n = frameCount();
+        for (uint256 i = 0; i < n; i++) {
+            if (frameModeOf(i) != MODE_SENDER) continue;
+            if (frameTarget(i) != address(this)) return false;
+        }
+        return true;
+    }
+
+    /// @dev Whether the executing frame targets the account running this code. Under
+    /// DELEGATECALL `address(this)` is the account, so this is how a module tells a frame
+    /// aimed at its account from one it was merely called from. The account may be the
+    /// transaction's sender or only its payer, so `tx.sender` is not compared here; a
+    /// validator binds its signature to the sender instead.
+    function isTargetedFrame() internal view returns (bool) {
+        return frameTarget(currentFrameIndex()) == address(this);
+    }
+
+    /// @dev The mode SENDER frame `i` presents. `batch` is `senderFrameCount() > 1`, taken
+    /// as a parameter so a caller walking every frame computes it once.
+    function presentedMode(uint256 i, bool batch) internal view returns (bytes32) {
+        return frameMode(batch, inAtomicBatch(i));
+    }
+
+    /*´:°•.°+.*•´.*:˚.°*.˚•´.°:°•.°•.*•´.*:˚.°*.˚•´.°:°•.°+.*•´.*:*/
+    /*                          APPROVE                           */
+    /*.•°:°.´+˚.*°.˚:*.´•*.+°.•°:´*.´•*.•°.•°:°.´:•˚°.*°.˚:*.´+°.•*/
+
+    /// @dev `APPROVE(0, 0, scope)`: commits `scope` and exits the frame. Never returns.
+    /// Reverts on `APPROVE_PAYMENT` while `sender_approved` is false.
+    function approveScope(uint8 scope) internal {
+        assembly {
+            approve(0, 0, scope)
+        }
+    }
+}
