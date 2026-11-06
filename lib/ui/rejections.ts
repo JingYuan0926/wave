@@ -113,9 +113,17 @@ const EXPLANATIONS: Record<string, Explanation> = {
     title: "This value is not valid",
     detail: "The new owner or root source cannot be zero.",
   },
+  LimitChanged: {
+    title: "A limit changed after the request",
+    detail: "WAVE sent nothing, because you approved the old limits. The agent must ask again.",
+  },
+  IdentityChanged: {
+    title: "Another World ID is linked now",
+    detail: "WAVE sent nothing. The agent must ask again.",
+  },
   SendFailed: {
-    title: "The server failed after the approval",
-    detail: "The approval is used, so nothing retries this. Check the wallet activity before you ask again.",
+    title: "The server failed before the send",
+    detail: "The approval is used, so nothing retries this. The agent must ask again.",
   },
   AgentPaused: {
     title: "This agent wallet is paused",
@@ -195,5 +203,18 @@ export function explainRejection(rejection: Rejection): Explanation & { stage: s
     title: known?.title ?? `Rejected: ${rejection.code}`,
     detail: known?.detail ?? rejection.message ?? "The chain gave no more detail.",
     stage: STAGE_TEXT[rejection.stage],
+  };
+}
+
+/** The general text sends the owner to Settings. The limits of an agent are on its own card. */
+export function explainAgentRejection(rejection: Rejection): Explanation & { stage: string } {
+  const text = explainRejection(rejection);
+  if (rejection.code !== "NoTier") return text;
+  return {
+    ...text,
+    title: "This is above the agent's onchain limit",
+    detail:
+      "The contract refused this. It does not fit in the most per day, or it is above what one payment can send. " +
+      "A World ID approval cannot change this. Nothing was sent.",
   };
 }
