@@ -5,10 +5,61 @@ import { useState } from "react";
 import { ApproveFlow, requireMethod, type ApprovalRequest } from "@/components/approve-flow";
 import { Badge, Button, Card, Notice, SectionTitle, Sheet } from "@/components/ui";
 import { useWallet } from "@/components/wallet-provider";
-import type { MethodView } from "@/lib/api-types";
+import type { MethodView, TierView, TokenInfo, TokenRules } from "@/lib/api-types";
+import { formatAmount } from "@/lib/ui/format";
 import { findPasskey, savePasskey } from "@/lib/ui/local";
 import { enrolPasskey, passkeysSupported } from "@/lib/ui/passkey";
-import { WORLD_ID, freePasskeySlot, methodLabel } from "@/lib/ui/rules";
+import { WORLD_ID, freePasskeySlot, maskHas, methodLabel } from "@/lib/ui/rules";
+
+const UINT96_MAX = (BigInt(1) << BigInt(96)) - BigInt(1);
+
+function periodLabel(seconds: number): string {
+  if (seconds === 86400) return "day";
+  if (seconds === 604800) return "week";
+  return `${seconds} seconds`;
+}
+
+function tierLine(tier: TierView, token: TokenInfo): string {
+  const amount = (value: string) => `${formatAmount(value, token.decimals)} ${token.symbol}`;
+  const size = BigInt(tier.upTo) >= UINT96_MAX ? `Any amount of ${token.symbol}` : `Up to ${amount(tier.upTo)}`;
+  const cap = tier.cap !== "0" ? `, ${amount(tier.cap)} per ${periodLabel(tier.period)}` : "";
+  return `${size}${cap}, ${tier.delay === 0 ? "at once" : "after a delay"}`;
+}
+
+/** The transfers this method can approve, from the rules on the chain. */
+function spendLines(
+  view: MethodView,
+  rules: TokenRules[],
+  tokenBy: (address: string) => TokenInfo | undefined,
+): string[] {
+  const isWorld = view.ref.kind === "world";
+  const synced = view.backup === "synced";
+  return rules.flatMap((rule) => {
+    const token = tokenBy(rule.token);
+    if (!token) return [];
+    // No tiers is the code default: World ID only, no delay.
+    if (rule.tiers.length === 0) return isWorld ? [`Any amount of ${token.symbol}, at once`] : [];
+    return rule.tiers
+      .filter((tier) => maskHas(tier.methods, view) && (!synced || tier.small))
+      .map((tier) => tierLine(tier, token));
+  });
+}
+
+function otherLines(view: MethodView): string[] {
+  if (view.ref.kind === "world") {
+    return [
+      "Add or remove a method (waits in the queue)",
+      "Loosen spending rules (waits in the queue)",
+      "Token approvals and contract calls (wait in the queue)",
+      "Cancel any queued action",
+    ];
+  }
+  return [
+    "Make spending rules stricter, at once",
+    "Cancel a normal queued action",
+    ...(view.backup === "device-bound" ? ["Start or approve a recovery"] : []),
+  ];
+}
 
 function MethodRow({
   view,
@@ -17,7 +68,8 @@ function MethodRow({
   view: MethodView;
   onRemove: (view: MethodView) => void;
 }) {
-  const { wallet, local, info } = useWallet();
+  const { wallet, local, info, account, tokenBy } = useWallet();
+  const spends = spendLines(view, account?.rules ?? [], tokenBy);
   const isPasskey = view.ref.kind === "passkey";
   const Icon = isPasskey ? Fingerprint : Globe;
   const here =
@@ -27,7 +79,7 @@ function MethodRow({
     findPasskey(local, wallet.address, view.ref.slot) !== null;
 
   return (
-    <li className="flex items-center gap-3">
+    <li className="flex items-start gap-3">
       <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted">
         <Icon aria-hidden="true" className="size-4" />
       </span>
@@ -43,6 +95,33 @@ function MethodRow({
                 : "Always on. World App approves."}
           {isPasskey && !here ? " Not on this browser." : ""}
         </p>
+        <p className="mt-2 text-xs font-medium">
+          {isPasskey ? "Sends with no World ID scan" : "Sends it can approve, one scan each"}
+        </p>
+        {spends.length > 0 ? (
+          <ul className="list-disc pl-4 text-xs text-muted-foreground">
+            {spends.map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-xs text-muted-foreground">
+            None yet. Add this method to a{view.backup === "synced" ? " small" : ""} tier in
+            Spending rules.
+          </p>
+        )}
+        <p className="mt-1 text-xs font-medium">It can also</p>
+        <ul className="list-disc pl-4 text-xs text-muted-foreground">
+          {otherLines(view).map((line) => (
+            <li key={line}>{line}</li>
+          ))}
+        </ul>
+        {isPasskey ? (
+          <p className="mt-1 text-xs text-muted-foreground">
+            It cannot add or remove methods, loosen rules, or approve token permissions. Those
+            need World ID.
+          </p>
+        ) : null}
       </div>
       {isPasskey ? (
         <Button variant="ghost" onClick={() => onRemove(view)}>
