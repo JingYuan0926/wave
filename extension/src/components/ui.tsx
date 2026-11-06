@@ -188,10 +188,51 @@ export function MethodChip({ method, label }: { method: MethodId; label?: string
   const Icon = METHOD_ICON[method];
   const names: Record<MethodId, string> = { worldid: "World ID", faceid: "Face ID", nfc: "NFC card" };
   return (
-    <span className="inline-flex h-7 items-center gap-1.5 rounded-full bg-white px-2.5 text-[13px] font-semibold text-ink-2 ring-1 ring-line">
-      <Icon className="size-3.5" aria-hidden />
+    <span className="inline-flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-white px-2.5 text-[13px] font-semibold text-ink-2 ring-1 ring-line">
+      <Icon className="size-3.5 shrink-0" aria-hidden />
       {label ?? names[method]}
     </span>
+  );
+}
+
+/* ---------- Controls ---------- */
+
+// Shared off-state grey for switches and meters.
+const OFF_FILL = "bg-[#cccccc]";
+
+export function Switch({ checked, onChange, label }: { checked: boolean; onChange: () => void; label: string }) {
+  // Track 52×32, knob 24 with a 4px inset. The knob is pinned with left-1;
+  // without it, an absolute child of a <button> starts at the centre of the track.
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      onClick={onChange}
+      className={`relative h-8 w-13 shrink-0 rounded-full transition-colors ${checked ? "bg-wave-deep" : OFF_FILL} ${focusRing}`}
+    >
+      <span
+        className={`absolute left-1 top-1 size-6 rounded-full bg-white shadow transition-transform ${checked ? "translate-x-5" : "translate-x-0"}`}
+        aria-hidden
+      />
+    </button>
+  );
+}
+
+export function Meter({ value, max, label, active = true }: { value: number; max: number; label: string; active?: boolean }) {
+  const pct = max > 0 ? Math.min(100, Math.max(0, (value / max) * 100)) : 0;
+  return (
+    <div
+      className="mt-2 h-2 overflow-hidden rounded-full bg-white"
+      role="progressbar"
+      aria-label={label}
+      aria-valuenow={Math.round(pct)}
+      aria-valuemin={0}
+      aria-valuemax={100}
+    >
+      <div className={`h-full rounded-full ${active ? "bg-wave-deep" : OFF_FILL}`} style={{ width: `${pct}%` }} />
+    </div>
   );
 }
 

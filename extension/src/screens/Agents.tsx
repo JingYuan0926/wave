@@ -1,7 +1,7 @@
 import { Bot, Plus, ShieldCheck } from "lucide-react";
 import { useStore } from "../store";
 import type { Nav } from "../nav";
-import { PageTitle, Pill, TopBar, focusRing } from "../components/ui";
+import { Meter, PageTitle, Pill, Switch, TopBar, focusRing } from "../components/ui";
 
 const PER_LABEL = { day: "today", week: "this week", month: "this month" } as const;
 
@@ -36,7 +36,6 @@ export function Agents({ nav }: { nav: Nav }) {
       ) : (
         <ul className="mt-5 space-y-3 px-5">
           {state.agents.map((a) => {
-            const pct = Math.min(100, (a.used / a.limit) * 100);
             return (
               <li key={a.id} className="rounded-[24px] bg-surface p-4">
                 <div className="flex items-center gap-3">
@@ -50,19 +49,7 @@ export function Agents({ nav }: { nav: Nav }) {
                     <p className="truncate text-[17px] font-bold">{a.name}</p>
                     <p className="truncate text-sm text-muted">{a.purpose}</p>
                   </div>
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={a.active}
-                    aria-label={`${a.name} ${a.active ? "active" : "paused"}`}
-                    onClick={() => toggleAgent(a.id)}
-                    className={`relative h-8 w-13 shrink-0 rounded-full transition-colors ${a.active ? "bg-wave-deep" : "bg-[#cccccc]"} ${focusRing}`}
-                  >
-                    <span
-                      className={`absolute top-1 size-6 rounded-full bg-white shadow transition-transform ${a.active ? "translate-x-6" : "translate-x-1"}`}
-                      aria-hidden
-                    />
-                  </button>
+                  <Switch checked={a.active} onChange={() => toggleAgent(a.id)} label={`${a.name} active`} />
                 </div>
 
                 <div className="mt-4">
@@ -75,16 +62,7 @@ export function Agents({ nav }: { nav: Nav }) {
                       {a.active ? "Active" : "Paused"}
                     </span>
                   </div>
-                  <div
-                    className="mt-2 h-2 overflow-hidden rounded-full bg-white"
-                    role="progressbar"
-                    aria-label={`${a.name} budget used`}
-                    aria-valuenow={Math.round(pct)}
-                    aria-valuemin={0}
-                    aria-valuemax={100}
-                  >
-                    <div className={`h-full rounded-full ${a.active ? "bg-wave-deep" : "bg-[#cccccc]"}`} style={{ width: `${pct}%` }} />
-                  </div>
+                  <Meter value={a.used} max={a.limit} label={`${a.name} budget used`} active={a.active} />
                 </div>
               </li>
             );

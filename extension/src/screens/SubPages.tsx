@@ -4,7 +4,7 @@ import { METHOD_INFO, RULES, type MethodKind, type Token } from "../data";
 import { fmtToken } from "../lib/format";
 import { hoursLeft, useNow, useStore } from "../store";
 import type { Nav } from "../nav";
-import { BackButton, MethodChip, PageTitle, TokenIcon, TopBar, focusRing } from "../components/ui";
+import { BackButton, MethodChip, Meter, PageTitle, TokenIcon, TopBar, focusRing } from "../components/ui";
 import { METHOD_KIND_ICON } from "../components/CardHolder";
 
 /* ---------- Spending limits ---------- */
@@ -45,11 +45,10 @@ export function SpendingLimits({ nav }: { nav: Nav }) {
 
       <ol className="mt-5 space-y-3 px-5">
         {tiers.map((t, i) => {
-          const pct = t.cap ? Math.min(100, (t.cap.used / t.cap.amount) * 100) : 0;
           return (
             <li key={i} className="rounded-[24px] bg-surface p-4">
-              <div className="flex items-center justify-between gap-3">
-                <p className="text-[17px] font-bold">{rangeLabel(i)}</p>
+              <div className="flex items-start justify-between gap-3">
+                <p className="min-w-0 pt-0.5 text-[17px] font-bold leading-snug">{rangeLabel(i)}</p>
                 <MethodChip method={t.method} />
               </div>
               <p className="mt-1.5 text-sm text-ink-2">
@@ -61,16 +60,7 @@ export function SpendingLimits({ nav }: { nav: Nav }) {
                     <span className="font-semibold tabular-nums text-ink">{fmtToken(t.cap.used, token)}</span> of{" "}
                     {fmtToken(t.cap.amount, token)} {t.cap.per === "day" ? "today" : "this week"}
                   </p>
-                  <div
-                    className="mt-2 h-2 overflow-hidden rounded-full bg-white"
-                    role="progressbar"
-                    aria-label="Period cap used"
-                    aria-valuenow={Math.round(pct)}
-                    aria-valuemin={0}
-                    aria-valuemax={100}
-                  >
-                    <div className="h-full rounded-full bg-wave-deep" style={{ width: `${pct}%` }} />
-                  </div>
+                  <Meter value={t.cap.used} max={t.cap.amount} label="Period cap used" />
                 </div>
               )}
             </li>
