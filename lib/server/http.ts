@@ -92,13 +92,33 @@ export function requireLocalHost(request: Request): string {
  */
 export function requireLocal(request: Request): void {
   const host = requireLocalHost(request)
+  // A sandboxed page sends the text "null", which is no URL.
   const origin = request.headers.get('origin')
-  if (origin && new URL(origin).host !== host) {
+  if (origin && URL.parse(origin)?.host !== host) {
     throw new ApiFailure('LOCAL_ONLY', 'This route rejects calls from another site.', 403)
   }
   if (!request.headers.get('content-type')?.toLowerCase().startsWith('application/json')) {
     throw new ApiFailure('BAD_REQUEST', 'This route needs a JSON content type.', 415)
   }
+}
+
+/**
+ * For a step that only the /agents page can take. A browser sets these headers itself, and code in
+ * a web page cannot change them. So this refuses a tool or a script that uses the normal routes.
+ * It is not a wall against a program on this computer: such a program can copy the headers.
+ * A browser sets Sec-Fetch headers only on a secure origin, so use localhost, not a LAN address.
+ */
+export function requirePage(request: Request): void {
+  requireLocal(request)
+  const headers = request.headers
+  const referer = URL.parse(headers.get('referer') ?? '')
+  const fromPage =
+    Boolean(headers.get('origin')) &&
+    headers.get('sec-fetch-site') === 'same-origin' &&
+    headers.get('sec-fetch-mode') === 'cors' &&
+    headers.get('sec-fetch-dest') === 'empty' &&
+    referer?.pathname === '/agents'
+  if (!fromPage) throw new ApiFailure('PAGE_ONLY', 'Only the /agents page on localhost can do this.', 403)
 }
 
 export function queryParam(request: Request, name: string): string {
