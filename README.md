@@ -1312,6 +1312,7 @@ These are the last runs, on 2026-11-06, on the local stack.
 | Sponsor limits | `SMOKE_BUDGET=1 npx tsx scripts/api-smoke.ts`, server with `WAVE_SPONSOR_DAILY_TX=1` | 8 passed, 0 failed |
 | Browser journey, synced passkey | Chromium at 1280 px | 44 of 44 steps, with the gas sponsor. Test identity, virtual authenticator. |
 | Browser journey, device-bound passkey | Chromium at 390 px | 55 of 55 steps, before the gas sponsor. Test identity, virtual authenticator. |
+| MCP tools, `/agents` and Limits | `npx tsx scripts/mcp-smoke.ts`, run on 2026-11-07 | 112 passed, 0 failed. Real MCP client, Chromium, local chain. Test identity and a local fake issuer. That issuer is not World. |
 | Lint and build | `npm run lint`, `npm run build` | Both exit 0 |
 
 `scripts/e2e.ts` takes about 20 minutes, because it waits for real blocks and delays.
@@ -1333,8 +1334,16 @@ WAVE_API_URL=http://localhost:3100 SMOKE_FULL=1 npx tsx scripts/api-smoke.ts
 After the test, stop that server. Then run `npm run build` in a new terminal, because the first
 build holds the blank World ID values.
 
-Agent wallets and Agent Pass have no entry in this table. The owner asked for compile checks only,
-so no test covers them.
+`scripts/mcp-smoke.ts` takes about 8 minutes, because it waits for a whole approval window. Its
+header lists the values that it needs. It needs `playwright-core` outside the project. Run it from
+a copy of the app, with no `.env.local` and no `.wave` folder, because the server changes the files
+in `.wave`. The script refuses port 3000. It starts the fake issuer itself. The run used a
+throwaway agent key, and it did not touch a real agent.
+
+Earlier checks of Agent Pass ran on 2026-11-07 from scratch scripts that are not in this repository.
+Those runs used the local chain, the real agent key path and a local fake issuer. The results were
+80 of 80 for the server modules and 16 of 16 for unknown results, restarts, the daily limit, pause
+and revoke.
 
 **Not run:**
 
@@ -1344,9 +1353,11 @@ so no test covers them.
 - a root republish after 8000 slots
 - a transaction that waits past 45 seconds
 - a full fallback change of the root source
-- any agent wallet flow on a chain: create, spend, limits, pause, revoke, withdraw
-- a World ID Agent Pass login, or any refused path of that flow
-- the `/agents` page with a wallet in it (the empty page loads in Chromium)
+- a full device login with a real World ID, so no real token reached the agent spend path
+- a Save in the Limits sheet on the owner's real agent, which is still in the old shape
+- a phone scan of the World ID link or QR code
+- a withdraw from an agent wallet on a chain
+- the Confirm step in Safari or Firefox
 - the UI text for `SponsorLimit` and `SponsorEmpty` (the API returned both codes)
 - `SponsorFeeCap` and `SponsorShape` on a live route (unit tests only)
 - the 390 px browser journey with the gas sponsor
