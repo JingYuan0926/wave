@@ -742,12 +742,16 @@ EIP-8141 transaction authorization.
 
 ### 1. Ethereum Foundation: Best use of the Frame Transaction Alternative Mempool
 
-- **What we expect only the alternative mempool allows:** a `VERIFY` frame that checks a World ID
-  zero-knowledge proof, above the public validation gas cap. Provisional until measured.
+- **What only the alternative mempool allows:** a `VERIFY` frame that checks a World ID
+  zero-knowledge proof, at about 236.8k gas. That is above the public validation gas cap of 100k.
+  This needs the budget change on the sidecar. See [the local devnet](#the-local-devnet).
 - **EF tools we use:** ERC-8286 frame validators, EIP-8250 keyed nonces, EIP-8272 recent roots and
   the devnet sidecar.
-- **Admitted transaction:** **TODO: link on explorer.altmempool.wtf**
-- **Code that submits it:** `scripts/send-worldid-frame-tx.ts` (TODO)
+- **Admitted transaction:** the local sidecar admits these transactions, and the local chain mines
+  them. Run `npx tsx scripts/e2e.ts` to get hashes and local explorer links.
+  **TODO: link on explorer.altmempool.wtf.** No transaction has run on the public devnet.
+- **Code that submits it:** `lib/server/send.ts` for the app, and `scripts/e2e.ts` for the tests.
+  Both use `sendToSidecar` in `lib/frametx.ts`.
 - **Trade-offs:** see the security model and CROPS sections.
 
 We also select the EF CROPS track. EF places each project in at most one EF prize.
@@ -758,6 +762,8 @@ We also select the EF CROPS track. EF places each project in at most one EF priz
 - **Credential:** Orb Proof of Human, verified onchain inside the account's own validation.
 - **Success path and alternative paths:** see "Alternative paths we demo".
 - **Integration debrief:** see the end of this README.
+
+### World: World ID Agent Pass — built, not tested
 
 ### 3. Whitechain: Scale · Payments Nobody Notices (planned, after the core)
 
