@@ -615,7 +615,8 @@ ownership.**
 
 **To create an agent wallet:**
 
-1. Open `/agents`, then set the limits and the "ask a human above" amount.
+1. Open `/agents`, then set two limits: the amount that the agent can send alone, and the most per
+   day.
 2. Approve with the owner method, in the same screens as a normal wallet.
 3. The server deploys the agent wallet with a plain transaction, as the sponsor does for a main
    wallet.
@@ -626,7 +627,8 @@ ownership.**
 
 1. The `VERIFY` frame runs `AgentKeyFrameValidator`: a secp256k1 signature over `sig_hash`. A pause
    or a revoke stops it.
-2. `execute` enforces the spending tiers. The default is deny, as in the main wallet.
+2. `execute` enforces the spending tiers. The default is deny, as in the main wallet. WAVE sets one
+   tier: `upTo` and `cap` both equal the most per day, with a period of one day.
 3. On the local network the gas sponsor pays, as for every wallet. On the devnet the agent wallet
    pays for its own gas, so it must hold ETH.
 
@@ -665,51 +667,98 @@ reads the code of the target. The target must be a clone that names this main wa
   the chosen wait.
 - There is no list of allowed targets. The limits set the amount, not the recipient.
 - An agent wallet does not prove that a human runs the agent.
-- **"Ask a human" needs World ID, also for a wallet with no World ID method.** Agent Pass is a
-  separate World login. It does not use the wallet's methods.
+- **Approval above the alone amount needs World ID, also for a wallet with no World ID method.**
+  Agent Pass is a separate World login. It does not use the wallet's methods.
+- **The alone amount is a server rule. The contract enforces only the daily total.** So someone
+  with the agent key can send up to the daily total with no human.
 
 #### Human approval with World ID Agent Pass
 
-> **Status: partly tested.** A real sandbox World ID login approved a stand-in action. A real agent
-> spend ran through this flow only with a local fake issuer. That issuer is not World.
+> **Status: partly tested.** A real sandbox World ID login approved a stand-in action in the browser
+> flow. A real device start and real polls ran against the sandbox, but no person finished a device
+> login. A real agent spend ran through the device flow only with a local fake issuer. That issuer
+> is not World. The MCP tools ran over stdio with a real MCP client, Chromium and the local chain,
+> and a real sandbox start reached the tool result. No person finished a device login. No real World
+> ID login has confirmed an agent payment. See [Test results](#test-results).
 
-An agent can act alone only up to a limit. Above that limit, a human must approve this exact
-action at that moment. World ID Agent Pass gives this fresh human check.
+An agent has two limits, as a main wallet has. It sends alone up to the alone amount. Above that
+amount, a human must approve this exact action at that moment. World ID Agent Pass gives this fresh
+human check. Nothing goes above the most per day, also with an approval. There is no third field.
+
+| Limit | Who enforces it | How a save applies |
+|---|---|---|
+| Agent can send alone up to | The server (`askAbove`) | Lower: at once. Higher: World ID, then Confirm. |
+| Most per day | The contract (tier `upTo` and `cap`) | Lower: at once. Higher: the owner method and the wait. |
+
+One Save button in the Limits sheet does both changes. The alone amount goes first, so a higher
+onchain limit never runs with an old, higher alone amount. An older agent with another shape shows
+its real numbers. For example, a tier of 5 per payment with a cap of 100 and an ask of 50 reads as
+"sends alone up to 5" and "one payment can send at most 5". Save changes it to the two limits.
+Because the onchain limit for one payment rises in that change, it needs the owner method and the wait.
 
 **The trust moment:** an agent asks to spend more than the owner allows it to spend alone.
 
 **How it works:**
 
-1. The agent asks for a spend above its "ask a human above" amount. The server stores the exact
-   action (agent wallet, recipient, token, amount), with a 1-minute expiry and a one-use approval
-   ID. Nothing runs yet.
-2. `/agents` shows "Needs human approval" with the decoded action.
-3. The owner completes a fresh World ID authentication. WAVE requests `max_age=0`.
-4. The backend validates the ID token: signature, issuer, audience, expiry, `state`, `nonce`, `acr`,
-   `auth_time`, and the `(iss, sub)` pair that is linked to this agent wallet.
-5. The backend uses the approval ID once. Only then does it send the agent's transaction.
+1. The agent asks for a spend above its alone amount. The server stores the exact
+   action (agent wallet, recipient, token, amount) and the limits at that moment, with a 3-minute
+   expiry and a one-use approval ID. Nothing runs yet.
+2. `/agents` shows "Needs human approval" with the decoded action. The `send_payment` MCP tool
+   shows the same action and code in a terminal.
+3. WAVE starts the Device Authorization Grant (RFC 8628: a login on a second device, with no
+   callback). It shows a user code, a link and a QR code. The server keeps the device code in
+   memory and never shows it.
+4. The owner completes a World ID login on a phone. World requires a fresh login for this grant.
+   The server polls World for the result.
+5. The backend validates the ID token: signature, issuer, audience, expiry, `acr`, `auth_time`,
+   `amr`, and the `(iss, sub)` pair that is linked to this agent wallet. Device tokens have no
+   `nonce`.
+6. The World page does not show the action. So the action moves to "Authenticated, confirm the
+   payment", and `/agents` shows the exact action with Confirm and Reject.
+7. Confirm uses the approval ID once, and it saves the send to disk before it starts. The backend
+   then checks the limits again and sends the agent's transaction under the onchain rules.
 
-**When the action does not run:** the owner cancels, the attempt expires, another person
-authenticates, the `acr` value is not accepted, a callback is replayed, or the provider returns an
-error. If Agent Pass is not configured, the action stays blocked. There is no bypass.
+**When the action does not run:** the owner cancels or rejects, the attempt or the 3-minute window
+expires, another person authenticates, the `acr` value is not accepted, a confirmation is repeated,
+a limit changed after the request, or the provider returns an error. HTTP 503 and HTTP 429 end the
+attempt. A failed attempt does not restart alone: a person must ask for a new code. If Agent Pass
+is not configured, the action stays blocked. There is no bypass.
+
+**A spend above the most per day** gets no approval step. Agent Pass never overrides this limit.
+The refusal says how much is left today.
+
+**When WAVE cannot tell the result of a send,** the action shows "Result unknown". It stays blocked
+and WAVE never sends it again. The owner must check the wallet activity.
 
 **Limits of this design:**
 
 - The backend enforces this check, not the contract. The demo agent key is on the server, so you
   must trust the server.
-- Pending actions are in server memory in the demo, so a server restart removes them.
-- The "ask a human above" amounts and the identity links are in `.wave/agents-<network>.json` on
-  the server, so a restart keeps them. A token with no amount asks a human for every spend.
-- A higher "ask a human above" amount needs an approval too. A first value or a lower value does
-  not.
-- The first approval for a wallet links the identity. No earlier check proves that this person
-  owns the wallet.
+- Confirm needs the browser headers of the `/agents` page and a one-use token. The server gives
+  this token only to a request with those headers. It works once, for one action, for 30 seconds.
+  No MCP tool calls these routes.
+- A program with shell access on the owner's computer can copy those headers, get a token and
+  confirm an action after a person passes World ID. It cannot skip World ID, and it cannot change
+  the action. This limit also applies to Claude Code if its shell tool can run. See
+  [Use WAVE from Claude Code](#use-wave-from-claude-code).
+- The demo agent key is in `.env.local`. A program that can read this file can sign alone. The
+  most per day still applies, but the alone amount does not. That program can send up to the daily
+  total with no human.
+- World ID proves the person. It does not sign the action. The exact action is approved in WAVE.
+- Pending actions are in server memory in the demo, so a server restart removes them. Only a send
+  with an open result stays, in `.wave/agent-sends-<network>.json`. It comes back as "Result
+  unknown", and it can never run again.
+- The alone amounts and the identity links are in `.wave/agents-<network>.json` on the server, so
+  a restart keeps them. A token with no amount asks a human for every spend.
+- A higher alone amount needs an approval too. A first value or a lower value does not.
+- The first confirmed approval for a wallet links the identity. No earlier check proves that this
+  person owns the wallet. So read the action and the first-approval note before you confirm.
 - The amount applies per spend. An agent can split a large spend into small ones, up to its daily
   limit.
 - Sandbox identities are fake. A sandbox run does not prove that a real person is Orb verified.
 - Agent Pass has no simulator. Testing uses the sandbox World ID app.
-- The app uses the authorization code flow only, so it needs the tunnel. The Device Authorization
-  Grant is not built.
+- The device flow needs no tunnel. The browser flow of the Settings test panel still needs one.
+  The World portal also needs a registered redirect URI for each client.
 
 The Settings card "Agent approval (World ID Agent Pass)" is a separate test panel. It guards a mint
 of 1 test USDC, not an agent spend.
@@ -807,7 +856,7 @@ risks move. This table lists them.
 ## Agent wallets and human approval
 
 The user's main WAVE wallet is the master of separate agent wallets. Each
-agent receives a spending limit per transfer and per day. The owner can
+agent has an amount that it can send alone and a most per day. The owner can
 revoke access.
 
 Agents operate automatically within those permissions. When an action
