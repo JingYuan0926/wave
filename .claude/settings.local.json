@@ -16,10 +16,14 @@
       "mcp__claude_ai_Claude_Docs__batch",
       "mcp__claude_ai_Claude_Docs__create",
       "Bash([ -f \"$f\" ])",
-      "Bash(python3 -u -c ' *)"
+      "Bash(python3 -u -c ' *)",
+      "mcp__wave"
     ],
     "defaultMode": "bypassPermissions"
   },
   "alwaysThinkingEnabled": true,
-  "skipDangerousModePermissionPrompt": true
+  "skipDangerousModePermissionPrompt": true,
+  "enabledMcpjsonServers": [
+    "wave"
+  ]
 }
