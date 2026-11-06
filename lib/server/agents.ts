@@ -34,7 +34,7 @@ import { prepareRejection, type Decoded } from './reject'
 import { sendTx } from './send'
 import { sponsorView } from './sponsor'
 
-const OPERATION_MS = 5 * 60_000
+const OPERATION_MS = 60_000
 /** Each ended operation stays visible. This cap keeps the memory small. */
 const MAX_OPERATIONS = 200
 

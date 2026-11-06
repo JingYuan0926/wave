@@ -28,7 +28,7 @@ const RETURN_URL = 'http://localhost:3000/settings'
 /** The return page for an agent action, and for a callback that matches no attempt. */
 const AGENTS_URL = 'http://localhost:3000/agents'
 
-const ATTEMPT_MS = 5 * 60_000
+const ATTEMPT_MS = 60_000
 const CLOCK_SKEW_SECONDS = 30
 const DISCOVERY_MS = 60 * 60_000
 const FETCH_TIMEOUT_MS = 10_000
@@ -203,7 +203,7 @@ function end(attempt: Attempt, reason: AgentPassReason, detail: string) {
 
 function expireIfDue(attempt: Attempt) {
   if (attempt.stage === 'pending' && Date.now() > attempt.expiresAt) {
-    end(attempt, 'expired', 'The 5-minute window ended before World ID returned.')
+    end(attempt, 'expired', 'The 1-minute window ended before World ID returned.')
   }
 }
 
@@ -435,7 +435,7 @@ async function verifyResponse(attempt: Attempt, params: URLSearchParams): Promis
  */
 function authorize(attempt: Attempt, claims: JWTPayload) {
   if (Date.now() > attempt.expiresAt) {
-    throw new Refusal('expired', 'The 5-minute window ended before the checks finished.')
+    throw new Refusal('expired', 'The 1-minute window ended before the checks finished.')
   }
   // A redeploy changes the token address. A mint to the old address would do nothing.
   if (!attempt.guarded && deployment().testUsdc !== attempt.token) {

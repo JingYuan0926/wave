@@ -12,7 +12,7 @@ const POLL_MS = 2000;
 
 export const REASONS: Record<AgentPassReason, string> = {
   cancelled: "You cancelled at World ID. The action did not run.",
-  expired: "The 5-minute window ended. The action did not run.",
+  expired: "The 1-minute window ended. The action did not run.",
   identity_mismatch: "A different World ID signed in. This wallet is linked to another identity. The action did not run.",
   unsupported_assurance: "World ID did not give an accepted Orb result for this attempt. The action did not run.",
   invalid_token: "The response from World ID failed a check. The action did not run.",
@@ -134,7 +134,7 @@ export function AgentPassCard() {
 
   return (
     <Card>
-      <SectionTitle hint="A human approves one exact action with a new World ID login.">
+      <SectionTitle hint="A human approves one exact action with a new World ID login. This login needs World ID, also for a wallet that has no World ID method.">
         Agent approval (World ID Agent Pass)
       </SectionTitle>
       {!status ? (
