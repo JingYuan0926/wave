@@ -120,8 +120,9 @@ We follow the account and factory pattern of the
 We replace that key with a World ID check.
 
 ```
-args     = validator || approvalScopes || modeBits || executionRoute || initData
+args     = validator || approvalScopes || modeBits || executionRoute || demoDelay || initData
 initData = ownerNullifierHash || externalNullifierHash || rootSourceId      (initial values)
+salt     = keccak256(ownerNullifierHash)
 account  = CREATE2(factory, salt, clone code || args)
 ```
 
@@ -129,12 +130,42 @@ account  = CREATE2(factory, salt, clone code || args)
   The same human gets the same value every time for the same action.
 - The address commits to the validator and the initial owner. Nobody can deploy this address
   with a different owner.
+- `demoDelay` (uint32) caps every delay, for the demo. Zero means real delays. The default is 120
+  seconds. The address commits to it, and the app shows "Demo delay: 2 minutes (real: 48 hours)".
 - **Initial values sit in the clone code. Changes go to storage and override them**, the same way
   the playground's getters read storage first and fall back to code. This covers the owner
   nullifier, the root source, the methods and the limits. Every change goes through the delay
-  queue.
-- The account can deploy itself in the first frame of its own first transaction (a `DEFAULT`
-  frame that calls the factory).
+  queue, except a stricter rule.
+- On the public devnet, the account deploys itself in the first frame of its own first
+  transaction (a `DEFAULT` frame that calls the factory). It must hold ETH before that transaction.
+- On the local network, the gas sponsor deploys the account with a plain transaction. See
+  [Gas sponsor](#gas-sponsor-local-network-only).
+
+### Gas sponsor (local network only)
+
+**With `WAVE_NETWORK=local`, every WAVE transaction is gasless for every wallet, with no setting.**
+With `WAVE_NETWORK=devnet` there is no sponsor, and each wallet pays its own gas.
+
+```
+frame[0]  VERIFY  target = account          scope = execution    the method approves
+frame[1]  VERIFY  target = WaveGasStation   scope = payment      calls pay()
+frame[2+] SENDER  target = account
+
+signatures = [ ARBITRARY entry with the witness, SECP256K1 entry from the sponsor key ]
+```
+
+- `WaveGasStation` pays when entry 1 is a `SECP256K1` signature over `sig_hash` from its immutable
+  sponsor address. It reads no storage, so it needs no foreign read in validation.
+- The server holds the sponsor key. Before it signs, it checks the frame order, the wallet code, a
+  fee cap (10 gwei per gas, 0.05 ETH per transaction) and a budget per wallet per day
+  (`WAVE_SPONSOR_DAILY_TX`, default 50).
+- **The chain does not enforce these limits.** The budget lives in server memory, so a server
+  restart clears it. The local sponsor key is derivable, and anyone who has it can spend the
+  station balance. This design is for a local network only.
+- The sponsor deploys a wallet at its first `tx/prepare`, because a deploy frame does not fit the
+  500,000 state gas limit of the prefix when the gas station pays. The wallet needs no ETH.
+- The account's fee limits and all rule checks stay the same.
+- The Fund button gives test tokens. A wallet needs them only to have something to send.
 
 ### One transaction, step by step (canonical-hash path)
 
