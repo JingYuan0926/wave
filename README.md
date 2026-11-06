@@ -13,7 +13,9 @@ EIP-8250 keyed nonces and EIP-8272 recent roots.
 
 > **Status: a working prototype on a local stack.** Every test ran on a local chain with a
 > local sidecar. No real World ID scan has run yet. No real Face ID or Touch ID has run yet.
-> A claim is proven only when its item in [Build status](#build-status) is checked. Not audited.
+> The gas sponsor runs on the local network only. Agent wallets and World ID Agent Pass are built
+> but not tested. A claim is proven only when its item in [Build status](#build-status) is checked.
+> Not audited.
 
 **What the name means:** the account first checks **authorization**: does the owner's rule allow
 this method for this action? Then it **verifies** the World ID proof or the passkey assertion.
@@ -589,6 +591,8 @@ error. If Agent Pass is not configured, the action stays blocked. There is no by
   limit.
 - Sandbox identities are fake. A sandbox run does not prove that a real person is Orb verified.
 - Agent Pass has no simulator. Testing uses the sandbox World ID app.
+- The app uses the authorization code flow only, so it needs the tunnel. The Device Authorization
+  Grant is not built.
 
 The Settings card "Agent approval (World ID Agent Pass)" is a separate test panel. It guards a mint
 of 1 test USDC, not an agent spend.
@@ -661,8 +665,8 @@ risks move. This table lists them.
 | A bad or buggy validator module | A module runs with full control of the account (`DELEGATECALL`). | Install only reviewed modules. Changes need World ID and a delay. | Module bugs. |
 | Dapps that ask for offchain signatures (ERC-1271, permits, sign-in) | The prototype cannot sign them. | None yet. | Some dapps will not work. |
 | Coercion | The owner is forced to approve. | Delays on sensitive actions. | Immediate spending under the daily limit. |
-| A stolen agent credential (planned feature) | The attacker can act as the agent. | The agent's budget and permissions. The owner can revoke at once. | Spending up to the budget before the owner revokes. |
-| A wallet that falsely names our main wallet as owner (planned feature) | It can look like one of our agent wallets. | The app lists only the agent wallets that the main wallet recorded. | Other apps can still show the false wallet. |
+| A stolen agent credential (built, not tested) | The attacker can act as the agent. | The agent's budget and permissions. The owner can revoke at once. | Spending up to the budget before the owner revokes. |
+| A wallet that falsely names our main wallet as owner (built, not tested) | It can look like one of our agent wallets. | The app lists only the agent wallets that the main wallet recorded. | Other apps can still show the false wallet. |
 
 ## CROPS
 
@@ -765,6 +769,15 @@ We also select the EF CROPS track. EF places each project in at most one EF priz
 
 ### World: World ID Agent Pass — built, not tested
 
+**Status: built, not tested.** No World ID login has completed through this flow.
+
+- **Trust moment:** an agent asks to spend more than the owner allows it to spend alone.
+- **Credential:** a fresh Orb-class World ID login, with `max_age=0`, for one exact action.
+- **Enforcement:** the backend enforces this check, not the contract. See
+  [Human approval with World ID Agent Pass](#human-approval-with-world-id-agent-pass).
+- This replaces the earlier AgentKit plan. WAVE has no AgentKit code, no AgentBook and no contract
+  for this feature.
+
 ### 3. Whitechain: Scale · Payments Nobody Notices (planned, after the core)
 
 **Status: planned.** We build this only after the core works.
@@ -830,6 +843,9 @@ virtual authenticator** sign with real P-256 math, but no device, face or finger
 - [ ] Fallback root source change with two distinct other methods. *A forge test checks who can
       propose it. No test runs the full change.*
 - [ ] Whitechain merchant version
+- [x] Local gas sponsor: a wallet with 0 ETH sends transactions, and the gas station pays only with
+      the sponsor signature. *Test identity and software authenticator. Local network only. The
+      fee cap and the shape check ran in unit tests only.*
 - [ ] Agent wallets: the user creates a child wallet with the normal creation flow. *Not tested.
       Compile only: no agent wallet ran on a chain.*
 - [ ] Agent wallets: the agent key and the spending tiers are enforced onchain. *Not tested.*
@@ -851,6 +867,7 @@ contracts/                        own package.json. Hardhat with the solc fork, 
     PasskeyFrameValidator.sol     WebAuthn P-256 assertion over sig_hash, with backup-flag check
     AgentKeyFrameValidator.sol    secp256k1 signature over sig_hash, for agent wallets only
     WaveAccountFactory.sol        CREATE2 clones with initial configuration in code
+    WaveGasStation.sol            local gas sponsor: a paymaster that needs the sponsor signature
     SemaphoreVerifier.sol         World's Groth16 verifier
     RecentRootRead.yul            helper that runs RECENTROOTREFLOAD (0xB6)
     TestUSDC.sol                  local test token, open mint
@@ -859,14 +876,15 @@ contracts/                        own package.json. Hardhat with the solc fork, 
 devnet/                           the local stack: ethrex, Lighthouse, sidecar, explorer
 lib/                              frame builder, chain client, World ID, policy encoding
 lib/server/                       route logic: prepare, send, roots, activity, World ID config,
-                                  agent wallets, Agent Pass
-app/                              web app and API route handlers
+                                  gas sponsor, agent wallets, Agent Pass
+app/                              web app and API route handlers. Pages: /, /settings, /agents
 components/                       web app components
 scripts/
-  e2e.ts                          12 cases on the local stack: real frames, real Groth16
+  e2e.ts                          15 cases on the local stack: real frames, real Groth16
   api-smoke.ts                    runs the API routes the same way the browser does
   unit.ts                         checks that need no chain
   fetch-zk.sh                     downloads the circuit files for the test identity
+.wave/                            gitignored. The server keeps agent checkpoint data here.
 ```
 
 The server publishes roots with a plain transaction, so `RootPublisher.sol` does not exist.
@@ -894,9 +912,44 @@ You need Node.js, and Docker or OrbStack. These steps assume macOS on Apple sili
 4. Run `npm run deploy` in `contracts/`. This writes `contracts/deployments/local.json`.
 5. Run `scripts/fetch-zk.sh` once. The test identity needs these circuit files.
 6. Run `cp -n .env.example .env.local`. The `-n` flag keeps an existing file. With the World ID
-   values blank, the app uses the test identity.
+   values blank, the app uses the test identity. See
+   [Environment variables](#environment-variables).
 7. Run `npx next dev -p 3000`.
 8. Open `http://localhost:3000`.
+
+On the local network a new wallet needs no ETH, because the gas sponsor pays. Use Fund to get test
+tokens. After a new deployment, clear the site data of the page. Old wallets give
+`ACCOUNT_MISMATCH` until you do this.
+
+`next dev` runs one server per folder. A second `next dev` in this folder exits with
+`Another next dev server is already running`.
+
+To use the `/agents` page:
+
+1. Run `openssl rand -hex 32`.
+2. Add `0x` in front of the result, and set it as `WAVE_AGENT_DEMO_KEY` in `.env.local`. Use a key
+   that holds no real value.
+3. Restart `next dev`.
+
+To use Agent Pass:
+
+1. Register a client in the World portal. Choose "Client secret (Basic)".
+2. Start a tunnel to the web server. The portal accepts HTTPS callbacks only, so
+   `http://localhost` does not work.
+
+   ```sh
+   cloudflared tunnel --url http://localhost:3000
+   ```
+
+3. Set `AGENT_PASS_REDIRECT_URI` to `https://<tunnel host>/api/agent-pass/callback`.
+4. Add the same URL to the client in the portal.
+5. Set `AGENT_PASS_CLIENT_ID` and `AGENT_PASS_CLIENT_SECRET` in `.env.local`.
+6. Restart `next dev`.
+7. Check your sandbox identity in the
+   [OAuth Playground](https://oauth-playground.toolsforhumanity.dev/) before you use the app.
+
+The server keeps each attempt in memory. So the tunnel must reach the same server process that
+started the attempt. A quick tunnel gets a new link at each start, so repeat steps 3 and 4 then.
 
 To stop:
 
@@ -905,6 +958,31 @@ To stop:
    run `devnet/up.sh` and `npm run deploy` in `contracts/` again.
 
 After the Mac sleeps, run `devnet/up.sh`. It keeps the chain.
+
+### Environment variables
+
+Put these in `.env.local`. `.env.example` has every value. All values are optional for a local
+run with the test identity.
+
+| Variable | Default | What it does |
+|---|---|---|
+| `WAVE_NETWORK` | `local` | `local` is your own stack, with the gas sponsor. `devnet` is the public devnet, with no sponsor. |
+| `WAVE_DEMO_DELAY` | `120` | The delay cap for new wallets, in seconds. `0` means real delays. The address commits to it. |
+| `WAVE_SPONSOR_DAILY_TX` | `50` | Sponsored transactions per wallet per day. The server enforces this. Local network only. |
+| `WAVE_ALLOW_LAN` | not set | `1` lets a phone on the LAN reach the local-only routes. |
+| `WAVE_DEV_KEY` | local dev key | A funded key for `devnet`. The local network does not need it. |
+| `WAVE_RPC_URL`, `WAVE_SIDECAR_URL`, `WAVE_EXPLORER_URL` | from `WAVE_NETWORK` | Override the network URLs. |
+| `NEXT_PUBLIC_WORLD_APP_ID`, `NEXT_PUBLIC_RP_ID`, `RP_SIGNING_KEY` | blank | World ID. Set all three for `idkit` mode. See [World ID modes](#world-id-modes). |
+| `NEXT_PUBLIC_WORLD_ENV` | `staging` | `staging`, `sandbox` or `production`. |
+| `WORLD_CHAIN_RPC_URL` | public RPC | The RPC for World Chain root reads. |
+| `AGENT_PASS_ISSUER` | `https://sandbox.auth.world.org` | The Agent Pass issuer. Production is `https://auth.world.org`. |
+| `AGENT_PASS_CLIENT_ID`, `AGENT_PASS_CLIENT_SECRET` | blank | With either one blank, the app shows "Agent Pass is not configured", and checkpointed actions stay blocked. |
+| `AGENT_PASS_REDIRECT_URI` | `http://localhost:3000/api/agent-pass/callback` | The callback URL. The portal needs HTTPS, so use a tunnel. |
+| `AGENT_PASS_ACR` | `https://world.org/oidc/acr/orb,https://world.org/oidc/acr/orb-face` | The accepted `acr` values. |
+| `WAVE_AGENT_DEMO_KEY` | blank | The demo agent key. It signs agent spends on the server. |
+| `NEXT_PUBLIC_WAVE_MOCK` | not set | `1` selects the mock data layer, for UI work only. It uses no chain and no proofs. |
+
+Keep `RP_SIGNING_KEY`, `AGENT_PASS_CLIENT_SECRET` and `WAVE_AGENT_DEMO_KEY` out of the repo.
 
 ### The local devnet
 
@@ -980,8 +1058,27 @@ These are the last runs, on 2026-11-06, on the local stack.
 | Browser journey, device-bound passkey | Chromium at 390 px | 55 of 55 steps, before the gas sponsor. Test identity, virtual authenticator. |
 | Lint and build | `npm run lint`, `npm run build` | Both exit 0 |
 
-`scripts/e2e.ts` takes about 15 minutes, because it waits for real blocks and delays.
-`scripts/api-smoke.ts` needs a server in test identity mode with `WAVE_DEMO_DELAY=20`.
+`scripts/e2e.ts` takes about 20 minutes, because it waits for real blocks and delays.
+`scripts/api-smoke.ts` takes about 8 minutes. It needs a server in test identity mode with
+`WAVE_DEMO_DELAY=20`. Blank values in the shell override `.env.local`, so that file does not change:
+
+```sh
+export NEXT_PUBLIC_WORLD_APP_ID= NEXT_PUBLIC_RP_ID= RP_SIGNING_KEY= WAVE_DEMO_DELAY=20
+npx next build
+npx next start -p 3100
+```
+
+In a second terminal, run:
+
+```sh
+WAVE_API_URL=http://localhost:3100 SMOKE_FULL=1 npx tsx scripts/api-smoke.ts
+```
+
+After the test, stop that server. Then run `npm run build` in a new terminal, because the first
+build holds the blank World ID values.
+
+Agent wallets and Agent Pass have no entry in this table. The owner asked for compile checks only,
+so no test covers them.
 
 **Not run:**
 
@@ -991,6 +1088,12 @@ These are the last runs, on 2026-11-06, on the local stack.
 - a root republish after 8000 slots
 - a transaction that waits past 45 seconds
 - a full fallback change of the root source
+- any agent wallet flow on a chain: create, spend, limits, pause, revoke, withdraw
+- a World ID Agent Pass login, or any refused path of that flow
+- the `/agents` page with a wallet in it (the empty page loads in Chromium)
+- the UI text for `SponsorLimit` and `SponsorEmpty` (the API returned both codes)
+- `SponsorFeeCap` and `SponsorShape` on a live route (unit tests only)
+- the 390 px browser journey with the gas sponsor
 
 ## Open questions
 

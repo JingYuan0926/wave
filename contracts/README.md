@@ -27,7 +27,7 @@ Run these in `contracts/`. The devnet must run first.
 Run the end-to-end cases from the repo root:
 
 1. Run `scripts/fetch-zk.sh` once.
-2. Run `npx tsx scripts/e2e.ts`. It takes about 15 minutes, because it waits for real blocks and delays.
+2. Run `npx tsx scripts/e2e.ts`. It takes about 20 minutes, because it waits for real blocks and delays.
 3. Run `npx tsx scripts/unit.ts` for the checks that need no chain. It takes a few seconds.
 
 ## Rule choices
