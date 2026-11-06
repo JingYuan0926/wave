@@ -1,0 +1,11 @@
+--- a/packages/executor/lib/services/UserOpValidation/utils/validationPrefix.js
++++ b/packages/executor/lib/services/UserOpValidation/utils/validationPrefix.js
+@@ -6,7 +6,7 @@
+  * "Maximum amount of gas a node should expend validating signatures and
+  * simulating the validation prefix."
+  */
+-export const MAX_VERIFY_GAS = BigInt(100000);
++export const MAX_VERIFY_GAS = BigInt(process.env.SKANDHA_MAX_VERIFY_GAS ?? 100000);
+ /**
+  * EIP-8141's intrinsic cost per signature, by scheme - not stated in
+  * erc-7562.md (that spec states the rule, FRA-040, that this cost counts
