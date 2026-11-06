@@ -464,6 +464,135 @@ still immediate.
 the funds are lost. An account with only synced passkeys has the same problem. The app asks the
 owner to enroll at least two more device-bound methods. Today that means two security keys.
 
+### Agent wallets
+
+> **Status: built, not tested.** The contracts, routes and `/agents` page compile. No agent wallet
+> has run on a chain.
+
+**You create each agent wallet. Your main wallet is its master. You create it the same way that you
+create a normal wallet.**
+
+```
+You -> World ID -> Main WAVE wallet
+                        | master
+                        v
+                  Agent WAVE wallet
+                  - Separate address and balance
+                  - One agent key
+                  - The same spending tiers as a main wallet
+```
+
+An agent wallet is the same `WaveAccount` clone from the same factory, with the same rules, tiers
+and delay queue. It has one more clone argument: `master`, the address of the main wallet. The
+agent wallet's address commits to `master`, so nobody can deploy it with another master. A main
+wallet has no `master` bytes.
+
+| Account | Authorization |
+|---|---|
+| Main wallet | The owner's World ID and other enrolled methods |
+| Agent wallet | The agent key spends inside the tiers. Only the master can administer the wallet. |
+
+EIP-8141 supplies the verification and execution steps. ERC-8286 supplies the validator interface.
+Neither one defines a parent and child relationship. **Our account contracts implement that
+ownership.**
+
+**To create an agent wallet:**
+
+1. Open `/agents`, then set the limits and the "ask a human above" amount.
+2. Approve with World ID, in the same screens as a normal wallet.
+3. The server deploys the agent wallet with a plain transaction, as the sponsor does for a main
+   wallet.
+4. The main wallet sends `agentSetup`, which sets the agent key and the first tiers. This works
+   once. The main wallet emits `AgentLinked`, and the app lists only those wallets.
+
+**When the agent spends:**
+
+1. The `VERIFY` frame runs `AgentKeyFrameValidator`: a secp256k1 signature over `sig_hash`. A pause
+   or a revoke stops it.
+2. `execute` enforces the spending tiers. The default is deny, as in the main wallet.
+3. On the local network the gas sponsor pays, as for every wallet. On the devnet the agent wallet
+   pays for its own gas, so it must hold ETH.
+
+**When the owner takes control:**
+
+1. The main wallet authenticates the owner, by the normal rules for each action.
+2. The main wallet calls the agent wallet.
+3. The agent wallet accepts an administrative call only if `msg.sender` is its `master`.
+
+If the main wallet changes its owner through recovery, its address stays the same. So it keeps
+control of its agent wallets. An agent wallet has no World ID owner and no recovery.
+
+**Owner actions on an agent wallet:**
+
+| Action | Who can approve | Delay |
+|---|---|---|
+| Create an agent wallet (it holds no funds yet) | World ID | None |
+| Send funds to an agent wallet | The main wallet's spending rule for that amount | The delay that the rule names |
+| Revoke the agent key, or pause the agent | Any enrolled method | None |
+| Make the agent's limits stricter | Any enrolled method | None |
+| Withdraw funds to the main wallet | Any enrolled method | None |
+| Loosen the agent's limits, replace the key, unpause | World ID | 48 hours (or the demo delay), cancellable |
+
+The main wallet's default deny treats other contract calls as unknown calls, which wait 24 hours.
+A revoke must not wait. So `execute` has a defined exception for these actions, and the exception
+reads the code of the target. The target must be a clone that names this main wallet as master.
+
+**An agent cannot create an agent wallet.** That permission is off.
+
+**Limits of this design:**
+
+- The agent key is a signing key. The "no seed phrase and no EOA key" claim covers the main wallet,
+  not the agent wallet.
+- A stolen agent key can spend up to the agent's limits, until the owner revokes it.
+- A stolen main wallet method can revoke or pause an agent. The restore needs World ID and 48 hours.
+- There is no list of allowed targets. The limits set the amount, not the recipient.
+- An agent wallet does not prove that a human runs the agent. World ID authenticates the owner of
+  the main wallet, not the agent.
+
+#### Human approval with World ID Agent Pass
+
+> **Status: built, not tested.** No World ID login has completed through this flow, and no agent
+> spend has run through it.
+
+An agent can act alone only up to a limit. Above that limit, a human must approve this exact
+action at that moment. World ID Agent Pass gives this fresh human check.
+
+**The trust moment:** an agent asks to spend more than the owner allows it to spend alone.
+
+**How it works:**
+
+1. The agent asks for a spend above its "ask a human above" amount. The server stores the exact
+   action (agent wallet, recipient, token, amount), with a 5-minute expiry and a one-use approval
+   ID. Nothing runs yet.
+2. `/agents` shows "Needs human approval" with the decoded action.
+3. The owner completes a fresh World ID authentication. WAVE requests `max_age=0`.
+4. The backend validates the ID token: signature, issuer, audience, expiry, `state`, `nonce`, `acr`,
+   `auth_time`, and the `(iss, sub)` pair that is linked to this agent wallet.
+5. The backend uses the approval ID once. Only then does it send the agent's transaction.
+
+**When the action does not run:** the owner cancels, the attempt expires, another person
+authenticates, the `acr` value is not accepted, a callback is replayed, or the provider returns an
+error. If Agent Pass is not configured, the action stays blocked. There is no bypass.
+
+**Limits of this design:**
+
+- The backend enforces this check, not the contract. The demo agent key is on the server, so you
+  must trust the server.
+- Pending actions are in server memory in the demo, so a server restart removes them.
+- The "ask a human above" amounts and the identity links are in `.wave/agents-<network>.json` on
+  the server, so a restart keeps them. A token with no amount asks a human for every spend.
+- A higher "ask a human above" amount needs an approval too. A first value or a lower value does
+  not.
+- The first approval for a wallet links the identity. No earlier check proves that this person
+  owns the wallet.
+- The amount applies per spend. An agent can split a large spend into small ones, up to its daily
+  limit.
+- Sandbox identities are fake. A sandbox run does not prove that a real person is Orb verified.
+- Agent Pass has no simulator. Testing uses the sandbox World ID app.
+
+The Settings card "Agent approval (World ID Agent Pass)" is a separate test panel. It guards a mint
+of 1 test USDC, not an agent spend.
+
 ### Why this may need the alternative mempool
 
 The EF track names two cases that only the alternative mempool allows. We expect case (a):
