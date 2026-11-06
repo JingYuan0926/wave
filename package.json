@@ -9,18 +9,32 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@forshtat/hegota-support": "0.0.1",
+    "@worldcoin/idkit": "4.6.0",
+    "@worldcoin/idkit-core": "4.6.0",
+    "@worldcoin/idkit-server": "1.2.0",
+    "class-variance-authority": "0.7.1",
+    "clsx": "2.1.1",
+    "jose": "6.2.13",
+    "lucide-react": "1.69.0",
     "next": "16.4.5",
+    "ox": "1.8.13",
     "react": "19.3.0",
-    "react-dom": "19.3.0"
+    "react-dom": "19.3.0",
+    "tailwind-merge": "3.7.0",
+    "viem": "2.57.16"
   },
   "devDependencies": {
     "@tailwindcss/turbopack": "^4",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "circomlibjs": "0.1.7",
     "eslint": "^9",
     "eslint-config-next": "16.4.5",
+    "snarkjs": "0.7.6",
     "tailwindcss": "^4",
+    "tsx": "4.23.15",
     "typescript": "^5"
   }
 }
