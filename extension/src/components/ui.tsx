@@ -27,7 +27,7 @@ type PillProps = {
 export function Pill({ children, onClick, tone = "white", icon: Icon, trailingIcon: Trailing }: PillProps) {
   const toneCls =
     tone === "accent"
-      ? "bg-wave text-ink shadow-[0_6px_20px_-6px_rgba(120,220,185,0.9)] hover:brightness-95"
+      ? "bg-wave-deep text-white shadow-[0_6px_20px_-6px_rgba(41,55,84,0.55)] hover:bg-[#1f2a40]"
       : "bg-white text-ink border border-line shadow-[0_6px_20px_-8px_rgba(41,55,84,0.18)] hover:bg-surface";
   return (
     <button
@@ -57,7 +57,7 @@ export function PrimaryButton({
 }) {
   const toneCls = {
     deep: "bg-wave-deep text-white hover:bg-[#1f2a40]", // darker shade of wave-deep for hover
-    accent: "bg-wave text-ink hover:brightness-95",
+    accent: "bg-wave-deep text-white hover:bg-[#1f2a40]",
     ghost: "bg-surface text-ink hover:bg-surface-2",
   }[tone];
   return (

@@ -73,7 +73,7 @@ export function Home({ nav }: { nav: Nav }) {
         <button
           type="button"
           onClick={() => nav.openSheet({ type: "scan" })}
-          className={`inline-flex h-11 shrink-0 items-center gap-2 rounded-full bg-wave px-4 text-base font-semibold hover:brightness-95 active:scale-[0.97] ${focusRing}`}
+          className={`inline-flex h-11 shrink-0 items-center gap-2 rounded-full bg-wave-deep px-4 text-base font-semibold text-white hover:bg-[#1f2a40] active:scale-[0.97] ${focusRing}`}
         >
           <ScanLine className="size-[18px]" aria-hidden /> Scan
         </button>
