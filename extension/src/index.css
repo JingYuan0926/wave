@@ -5,17 +5,17 @@
 @theme {
   --font-sans: "Plus Jakarta Sans Variable", ui-sans-serif, system-ui, sans-serif;
 
-  --color-ink: #070808;
-  --color-ink-2: #2e3333;
-  --color-muted: #5c6363;
-  --color-line: #e6e8e8;
-  --color-surface: #f2f3f3;
-  --color-surface-2: #e6e8e8;
+  --color-ink: #293754;
+  --color-ink-2: #4a5670;
+  --color-muted: #5f6a80;
+  --color-line: #e7eaf0;
+  --color-surface: #f3f4f7;
+  --color-surface-2: #e7eaf0;
 
   --color-wave: #c2fae5;
   --color-wave-soft: #e4fdf4;
   --color-wave-mist: #e4fdf4;
-  --color-wave-deep: #070808;
+  --color-wave-deep: #293754;
 
   --color-positive: #0f7a4d;
   --color-danger: #b42318;

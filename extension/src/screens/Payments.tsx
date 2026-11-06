@@ -93,7 +93,7 @@ export function Payments({ nav }: { nav: Nav }) {
                       <button
                         type="button"
                         onClick={() => runNow(p.id)}
-                        className={`h-11 flex-1 rounded-full bg-wave-deep text-[15px] font-semibold text-white hover:bg-[#222626] ${focusRing}`}
+                        className={`h-11 flex-1 rounded-full bg-wave-deep text-[15px] font-semibold text-white hover:bg-[#1f2a40] ${focusRing}`}
                       >
                         Run now
                       </button>

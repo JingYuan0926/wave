@@ -119,7 +119,7 @@ export function SendSheet({ onClose, recipientId }: { onClose: () => void; recip
                 const v = e.target.value.replace(",", ".");
                 if (/^\d*\.?\d{0,6}$/.test(v)) setRaw(v);
               }}
-              className="mt-2 w-full bg-transparent text-[2.5rem] font-bold tabular-nums tracking-tight outline-none placeholder:text-[#b4baba]"
+              className="mt-2 w-full bg-transparent text-[2.5rem] font-bold tabular-nums tracking-tight outline-none placeholder:text-[#b5bccb]"
             />
             <p id="amount-help" className={`text-sm ${overBalance ? "font-semibold text-danger" : "text-muted"}`}>
               {overBalance ? `More than your balance of ${fmtToken(balance, token)}` : `Balance: ${fmtToken(balance, token)}`}

@@ -28,7 +28,7 @@ export function Pill({ children, onClick, tone = "white", icon: Icon, trailingIc
   const toneCls =
     tone === "accent"
       ? "bg-wave text-ink shadow-[0_6px_20px_-6px_rgba(120,220,185,0.9)] hover:brightness-95"
-      : "bg-white text-ink border border-line shadow-[0_6px_20px_-8px_rgba(7,8,8,0.18)] hover:bg-surface";
+      : "bg-white text-ink border border-line shadow-[0_6px_20px_-8px_rgba(41,55,84,0.18)] hover:bg-surface";
   return (
     <button
       type="button"
@@ -56,7 +56,7 @@ export function PrimaryButton({
   tone?: "deep" | "accent" | "ghost";
 }) {
   const toneCls = {
-    deep: "bg-wave-deep text-white hover:bg-[#222626]", // darker shade of wave-deep for hover
+    deep: "bg-wave-deep text-white hover:bg-[#1f2a40]", // darker shade of wave-deep for hover
     accent: "bg-wave text-ink hover:brightness-95",
     ghost: "bg-surface text-ink hover:bg-surface-2",
   }[tone];
@@ -102,7 +102,7 @@ export function BackButton({ onClick }: { onClick: () => void }) {
       type="button"
       onClick={onClick}
       aria-label="Back"
-      className={`grid size-11 place-items-center rounded-full border border-line bg-white shadow-[0_6px_20px_-8px_rgba(7,8,8,0.18)] hover:bg-surface ${focusRing}`}
+      className={`grid size-11 place-items-center rounded-full border border-line bg-white shadow-[0_6px_20px_-8px_rgba(41,55,84,0.18)] hover:bg-surface ${focusRing}`}
     >
       <ChevronLeft className="size-5" aria-hidden />
     </button>
@@ -172,7 +172,7 @@ export function ListRow({
 }
 
 export function Avatar({ name, size = "md" }: { name: string; size?: "md" | "lg" }) {
-  const palette = ["bg-wave-soft text-wave-deep", "bg-[#ece8ff] text-[#3d2a8a]", "bg-[#ffeadd] text-[#8a3a0a]", "bg-[#eef0f0] text-[#2e3333]"];
+  const palette = ["bg-wave-soft text-wave-deep", "bg-[#ece8ff] text-[#3d2a8a]", "bg-[#ffeadd] text-[#8a3a0a]", "bg-[#eef0f4] text-[#4a5670]"];
   const idx = [...name].reduce((n, c) => n + c.charCodeAt(0), 0) % palette.length;
   const sz = size === "lg" ? "size-14 text-lg" : "size-12 text-base";
   return (

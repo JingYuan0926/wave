@@ -15,7 +15,7 @@ export function BottomNav({ active, onChange }: { active: Tab; onChange: (t: Tab
     <>
       <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 h-32 bg-linear-to-t from-white via-white/85 to-white/0" aria-hidden />
       <nav aria-label="Main" className="absolute inset-x-3 bottom-[var(--nav-bottom,0.75rem)] z-30">
-        <div className="flex gap-1 rounded-full border border-line/80 bg-white/95 p-1.5 shadow-[0_10px_34px_-10px_rgba(7,8,8,0.28)] backdrop-blur-md">
+        <div className="flex gap-1 rounded-full border border-line/80 bg-white/95 p-1.5 shadow-[0_10px_34px_-10px_rgba(41,55,84,0.28)] backdrop-blur-md">
           {TABS.map(({ id, label, icon: Icon }) => {
             const isActive = id === active;
             return (

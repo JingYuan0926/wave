@@ -7,7 +7,7 @@ export const CARD_DESIGNS: Record<CardDesign, [string, string, string]> = {
   ocean: ["#0a4a57", "#1497a8", "#5fe0e8"],
   dusk: ["#3a2a7a", "#7b5bd6", "#c8b8ff"],
   coral: ["#8f2a2a", "#e8604a", "#ffc38a"],
-  mint: ["#070808", "#2f5a4b", "#c2fae5"],
+  mint: ["#293754", "#3f6a73", "#c2fae5"],
   night: ["#0b1b2b", "#24425e", "#6b93b5"],
 };
 
@@ -54,7 +54,7 @@ export type HolderCard = {
 export function CardFace({ card, label }: { card: HolderCard; label?: string }) {
   const Icon = card.icon;
   return (
-    <div className="relative h-[200px] w-full overflow-hidden rounded-[16px] shadow-[0_-2px_10px_rgba(7,8,8,0.12)]">
+    <div className="relative h-[200px] w-full overflow-hidden rounded-[16px] shadow-[0_-2px_10px_rgba(41,55,84,0.12)]">
       <div className={card.pendingLabel ? "absolute inset-0 grayscale-[0.7]" : "absolute inset-0"}>
         <CardArt design={card.design} />
       </div>
@@ -204,7 +204,7 @@ export function HolderChip({ icon: Icon, children, onClick }: { icon: LucideIcon
       <button
         type="button"
         onClick={onClick}
-        className={`inline-flex h-10 items-center gap-2 rounded-full bg-surface-2 px-3.5 text-[15px] font-semibold text-ink-2 hover:bg-[#dadddd] ${focusRing}`}
+        className={`inline-flex h-10 items-center gap-2 rounded-full bg-surface-2 px-3.5 text-[15px] font-semibold text-ink-2 hover:bg-[#dde1e8] ${focusRing}`}
       >
         <Icon className="size-4" aria-hidden /> {children}
       </button>

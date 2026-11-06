@@ -198,7 +198,7 @@ function MethodRow({
           onClick={action.onClick}
           disabled={action.disabled}
           className={`h-10 shrink-0 rounded-full px-4 text-[15px] font-semibold ${
-            action.disabled ? "bg-warn-soft text-warn" : "bg-wave-deep text-white hover:bg-[#222626]"
+            action.disabled ? "bg-warn-soft text-warn" : "bg-wave-deep text-white hover:bg-[#1f2a40]"
           } ${focusRing}`}
         >
           {action.label}
