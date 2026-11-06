@@ -4,3 +4,5 @@ cache
 out-forge
 .solc
 cache-forge
+artifacts-wc
+cache-wc
