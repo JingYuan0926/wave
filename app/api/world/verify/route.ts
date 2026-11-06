@@ -1,16 +1,14 @@
-import { decodeAbiParameters, keccak256, numberToHex } from "viem";
-import { cloneArgs } from "@/lib/account";
+import { after } from "next/server";
+import { decodeAbiParameters, numberToHex } from "viem";
 import type { WorldProof, WorldVerifyRequest, WorldVerifyResponse } from "@/lib/api-types";
-import { publicClient } from "@/lib/chain";
 import { ApiFailure, asHex, deployment, readBody, route } from "@/lib/server/http";
-import { demoDelay } from "@/lib/server/prepare";
+import { referenceFor } from "@/lib/server/roots";
+import { plannedWallet } from "@/lib/server/wallet-plan";
 import {
   checkProofOnchain,
-  externalNullifier,
   verifyWithPortal,
   worldConfig,
 } from "@/lib/server/world-config";
-import { WaveAccountFactoryAbi } from "@/lib/wave-abi";
 
 const PROOF_WORDS = [{ type: "uint256[8]" }] as const;
 
@@ -29,22 +27,14 @@ async function checkedProof(body: WorldVerifyRequest): Promise<WorldProof> {
 export const POST = route(async (request): Promise<WorldVerifyResponse> => {
   const proof = await checkedProof(await readBody<WorldVerifyRequest>(request));
   const d = deployment();
-  const owner = BigInt(proof.nullifierHash);
-  const ownerNullifierHash = numberToHex(owner, { size: 32 });
-  // One human gets one address on this deployment, on every device.
-  const salt = keccak256(ownerNullifierHash);
-  const args = cloneArgs({
-    worldIdValidator: d.worldIdValidator,
-    ownerNullifierHash: owner,
-    externalNullifierHash: externalNullifier(),
-    rootSourceId: d.rootSourceId,
-    demoDelay: demoDelay(),
-  });
-  const address = await publicClient.readContract({
-    address: d.factory,
-    abi: WaveAccountFactoryAbi,
-    functionName: "predict",
-    args: [d.implementation, args, salt],
-  });
-  return { ownerNullifierHash, merkleRoot: proof.merkleRoot, address, salt };
+  const ownerNullifierHash = numberToHex(BigInt(proof.nullifierHash), { size: 32 });
+  const planned = await plannedWallet(d, { owner: { kind: "world", nullifierHash: ownerNullifierHash }, extras: [] });
+  // Publish now, so the first World ID send does not wait for it. A failure here only costs that wait.
+  after(() => referenceFor(proof.merkleRoot).catch((error) => console.error("[wave api] root publish", error)));
+  return {
+    ownerNullifierHash,
+    merkleRoot: proof.merkleRoot,
+    address: planned.address,
+    salt: planned.frame.salt,
+  };
 });
