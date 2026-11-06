@@ -19,13 +19,12 @@ import type {
   WorldProof,
 } from "@/lib/api-types";
 import { cn } from "@/lib/ui/cn";
-import { shortHex } from "@/lib/ui/format";
 import { findPasskey, getPasskey, recoveryIdentityOf, setRootHint } from "@/lib/ui/local";
 import { signWithPasskey } from "@/lib/ui/passkey";
 import { explainRejection } from "@/lib/ui/rejections";
 import { methodDetail, methodLabel, sameMethod, type MethodChoice } from "@/lib/ui/rules";
 import { sameRoot } from "@/lib/ui/world";
-import { Badge, Button, Notice, Skeleton, focusRing } from "./ui";
+import { Badge, Button, CopyHex, Notice, Skeleton, focusRing } from "./ui";
 import { useWallet } from "./wallet-provider";
 import { WorldScan } from "./world-scan";
 
@@ -176,24 +175,33 @@ function Review({ prepared, world }: { prepared: TxPrepared; world: InfoResponse
 
 function ExplorerLink({ info, hash }: { info: InfoResponse; hash: Hex }) {
   return (
-    <a
-      href={explorerTxUrl(info, hash)}
-      target="_blank"
-      rel="noreferrer"
-      className={`inline-flex min-h-10 items-center gap-1 rounded-lg font-mono text-sm underline tabular-nums ${focusRing}`}
-    >
-      {shortHex(hash, 10, 8)}
-      <ExternalLink aria-hidden="true" className="size-3.5" />
-    </a>
+    <div className="rounded-xl bg-muted px-3 py-2">
+      <p className="text-xs text-muted-foreground">Transaction hash</p>
+      <p className="font-mono text-xs break-all">{hash}</p>
+      <div className="flex items-center gap-3">
+        <CopyHex value={hash} />
+        <a
+          href={explorerTxUrl(info, hash)}
+          target="_blank"
+          rel="noreferrer"
+          className={`inline-flex min-h-10 items-center gap-1 rounded-lg text-sm underline ${focusRing}`}
+        >
+          Open in explorer
+          <ExternalLink aria-hidden="true" className="size-3.5" />
+        </a>
+      </div>
+    </div>
   );
 }
 
 function RejectionView({
+  info,
   rejection,
   expected,
   missed,
   onRetry,
 }: {
+  info: InfoResponse;
   rejection: Rejection;
   expected: boolean;
   /** A security demo stopped for another reason, so it proves nothing. */
@@ -228,6 +236,13 @@ function RejectionView({
         {rejection.failedFrameIndex !== undefined ? ` at frame ${rejection.failedFrameIndex}` : ""}
         {rejection.haltReason ? ` (${rejection.haltReason})` : ""}
       </p>
+      {rejection.txHash ? (
+        <ExplorerLink info={info} hash={rejection.txHash} />
+      ) : (
+        <p className="text-sm text-muted-foreground">
+          WAVE sent nothing to the chain, so this has no transaction hash.
+        </p>
+      )}
       {rejection.frames ? (
         <FrameList frames={rejection.frames} failedIndex={rejection.failedFrameIndex} />
       ) : null}
@@ -446,6 +461,7 @@ export function ApproveFlow({
       const proved = demo && (request.expectCodes ?? []).includes(stage.rejection.code);
       return (
         <RejectionView
+          info={info}
           rejection={stage.rejection}
           expected={proved}
           missed={demo && !proved}

@@ -203,6 +203,8 @@ export type Rejection = {
   failedFrameIndex?: number;
   haltReason?: string;
   frames?: FrameView[];
+  /** Set when the chain mined the failed tx. A failure before the mempool has no hash. */
+  txHash?: Hex;
 };
 
 export type RootReference = {

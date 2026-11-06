@@ -136,6 +136,7 @@ async function chainRejection(hash: Hex, frames: FrameView[]): Promise<Rejection
     }`,
     failedFrameIndex,
     frames,
+    txHash: hash,
   }
 }
 
