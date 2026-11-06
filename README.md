@@ -1036,7 +1036,25 @@ These are the last runs, on 2026-11-06, on the local stack.
 
 ## How we used AI
 
-**TODO:** describe how the team used AI tools, as ETHGlobal's rules require.
+> **Draft.** An AI tool wrote this draft. The team must check it and add what is missing before
+> submission.
+
+We used Claude Code (Claude Opus 5.5) for most of the build.
+
+- **Humans:** the team chose the product and the design. That covers the World ID validator, the
+  mix-and-match methods, the spending rules, the delay queue and the agent wallet plan. The team
+  also made the calls on scope, such as moving NFC to later.
+- **Research:** AI agents read the EIPs, the ERC-8286 playground, the sidecar, ethrex and the World
+  ID sources. They ran probes on the public devnet and on a local stack. They found the facts in
+  [Chain facts](#chain-facts) and the answers in [Open questions](#open-questions).
+- **Code:** AI agents wrote the contracts, the web app, the API routes, the local devnet scripts
+  and the tests. A written spec recorded the decisions, and the agents logged each change from it.
+- **Testing and review:** AI agents ran the forge, end-to-end, API and browser tests. An AI code
+  review found defects, and AI agents fixed them.
+- **Docs:** AI agents updated this README to match the tests.
+
+**TODO:** name the code that a human reviewed line by line. State any other AI tools that the team
+used, and link the prompts or specs if ETHGlobal asks for them.
 
 ## World ID integration debrief
 
