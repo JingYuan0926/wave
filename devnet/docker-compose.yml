@@ -1,0 +1,224 @@
+# WAVE local devnet: ethrex (execution), Lighthouse (consensus and validator),
+# the alt-mempool sidecar, and the sidecar explorer.
+#
+# Do not start this file by hand. Use devnet/up.sh. It runs the steps in order.
+# Derived from deploy/devnet/docker-compose.yml in forshtat/mempool-workshop-sidecar
+# at commit 2e22ff0. devnet/README.md lists every difference.
+#
+# All images are pinned by digest. A tag such as ":latest" can move.
+
+name: ${WAVE_DEVNET_PROJECT:-wave-devnet}
+
+x-restart: &service-defaults
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options:
+      max-size: "20m"
+      max-file: "3"
+
+# A fixed subnet gives lighthouse-beacon a fixed IP. Its ENR holds that IP, and
+# the IP must not change when Docker restarts the containers after a sleep.
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: ${WAVE_DEVNET_SUBNET:-10.181.37}.0/24
+
+services:
+  # One-shot. Writes the EL and CL genesis and the JWT secret.
+  # GENESIS_TIMESTAMP comes from up.sh. The "init" profile keeps this service
+  # out of a normal "up", because it fails when its output already exists.
+  genesis:
+    profiles: [init]
+    image: ethpandaops/ethereum-genesis-generator@sha256:51decce4284d8498dabfa38ae13ddce84cbf8c7be4f33a32b798ce10c9868e77 # tag 6.1.6
+    environment:
+      - GENESIS_TIMESTAMP
+    volumes:
+      - ${WAVE_DEVNET_DATA:-./.data}/genesis:/data
+      - ./genesis.values.env:/config/values.env:ro
+    command: ["all"]
+
+  # One-shot. Makes keystores for the 32 genesis validators from the public
+  # default mnemonic of the generator. These keys are for this devnet only.
+  validator-keys:
+    profiles: [init]
+    image: protolambda/eth2-val-tools@sha256:7fb4e35dd39845407e1c61b39a992202cd9ceb6203a5928ab1e00151401c4fae # tag latest, built 2026-10-16
+    volumes:
+      - ${WAVE_DEVNET_DATA:-./.data}/validator-keys:/data
+    command:
+      - keystores
+      - --insecure
+      - --source-mnemonic
+      - "sleep moment list remain like wall lake industry canvas wonder ecology elite duck salad naive syrup frame brass utility club odor country obey pudding"
+      - --source-min=0
+      - --source-max=32
+      # eth2-val-tools refuses a path that exists. A bind mount root always
+      # exists, so this must be a new subdirectory.
+      - --out-loc=/data/keystores
+
+  ethrex:
+    <<: *service-defaults
+    image: ghcr.io/forshtat/ethrex@sha256:920295ae5496669a6f90a44431d4cbcb4703feec0e89207599fe19a251739873 # tag eip8141-tracer-latest
+    platform: linux/amd64
+    volumes:
+      - ${WAVE_DEVNET_DATA:-./.data}/genesis:/genesis:ro
+      - ${WAVE_DEVNET_DATA:-./.data}/ethrex:/data
+    ports:
+      # Localhost only. This port also serves the privileged submission method.
+      - "127.0.0.1:${WAVE_RPC_PORT:-8545}:8545/tcp"
+    command:
+      - "--network=/genesis/metadata/genesis.json"
+      - "--datadir=/data"
+      - "--http.addr=0.0.0.0"
+      - "--http.port=8545"
+      - "--http.api=eth,net,web3,ethrex,debug,admin,txpool"
+      - "--authrpc.addr=0.0.0.0"
+      - "--authrpc.port=8551"
+      - "--authrpc.jwtsecret=/genesis/jwt/jwtsecret"
+      - "--log.level=info"
+      # The default snap sync needs peers. This chain has no EL peers, so it
+      # would report "syncing" forever.
+      - "--syncmode=full"
+      - "--p2p.addr=0.0.0.0"
+      - "--p2p.port=30303"
+      - "--discovery.port=30303"
+
+  lighthouse-beacon:
+    <<: *service-defaults
+    image: ethpandaops/lighthouse@sha256:dd7e92e2e9c3127750e9bff5f8a0efec686f296445a44ef5d9c1eb750e8906b0 # tag focil
+    depends_on:
+      ethrex:
+        condition: service_started
+    networks:
+      default:
+        ipv4_address: ${WAVE_DEVNET_SUBNET:-10.181.37}.100
+    volumes:
+      - ${WAVE_DEVNET_DATA:-./.data}/genesis:/genesis:ro
+      - ${WAVE_DEVNET_DATA:-./.data}/lighthouse-beacon:/data
+    ports:
+      # up.sh reads the ENR here, and status.sh reads the slot and the peers.
+      - "127.0.0.1:${WAVE_BEACON_PORT:-5052}:5052/tcp"
+    entrypoint: ["lighthouse"]
+    command:
+      - bn
+      - --testnet-dir=/genesis/metadata
+      - --datadir=/data
+      - --execution-endpoint=http://ethrex:8551
+      - --execution-jwt=/genesis/jwt/jwtsecret
+      - --debug-level=info
+      - --http
+      - --http-address=0.0.0.0
+      - --http-port=5052
+      - --listen-address=0.0.0.0
+      - --port=9000
+      - --supernode
+      - --allow-insecure-genesis-sync
+      - --ignore-ws-check
+      - --enable-private-discovery
+      # Without this flag the ENR has no IP, and lighthouse-beacon-2 cannot dial.
+      - --enr-address=${WAVE_DEVNET_SUBNET:-10.181.37}.100
+
+  # A second beacon node with no validators. A beacon node with zero peers stays
+  # in SyncState::Stalled and never builds a block. This node gives
+  # lighthouse-beacon its one peer. up.sh gets the ENR from lighthouse-beacon
+  # and stores it in the data folder. This value stays valid after a restart.
+  lighthouse-beacon-2:
+    <<: *service-defaults
+    image: ethpandaops/lighthouse@sha256:dd7e92e2e9c3127750e9bff5f8a0efec686f296445a44ef5d9c1eb750e8906b0 # tag focil
+    depends_on:
+      lighthouse-beacon:
+        condition: service_started
+    volumes:
+      - ${WAVE_DEVNET_DATA:-./.data}/genesis:/genesis:ro
+      - ${WAVE_DEVNET_DATA:-./.data}/lighthouse-beacon-2:/data
+    entrypoint: ["lighthouse"]
+    command:
+      - bn
+      - --testnet-dir=/genesis/metadata
+      - --datadir=/data
+      - --execution-endpoint=http://ethrex:8551
+      - --execution-jwt=/genesis/jwt/jwtsecret
+      - --debug-level=info
+      - --http
+      - --http-address=0.0.0.0
+      - --http-port=5052
+      - --listen-address=0.0.0.0
+      - --port=9000
+      - --supernode
+      - --allow-insecure-genesis-sync
+      - --ignore-ws-check
+      - --enable-private-discovery
+      - --boot-nodes=${LIGHTHOUSE_BEACON_1_ENR:-}
+
+  # lighthouse vc finds keystores in <datadir>/validators by itself.
+  lighthouse-validator:
+    <<: *service-defaults
+    image: ethpandaops/lighthouse@sha256:dd7e92e2e9c3127750e9bff5f8a0efec686f296445a44ef5d9c1eb750e8906b0 # tag focil
+    depends_on:
+      lighthouse-beacon:
+        condition: service_started
+    volumes:
+      - ${WAVE_DEVNET_DATA:-./.data}/genesis:/genesis:ro
+      - ${WAVE_DEVNET_DATA:-./.data}/lighthouse-validator:/data
+      - ${WAVE_DEVNET_DATA:-./.data}/validator-keys/keystores/keys:/data/validators
+      - ${WAVE_DEVNET_DATA:-./.data}/validator-keys/keystores/secrets:/data/secrets:ro
+    entrypoint: ["lighthouse"]
+    command:
+      - vc
+      - --testnet-dir=/genesis/metadata
+      - --datadir=/data
+      - --secrets-dir=/data/secrets
+      - --beacon-nodes=http://lighthouse-beacon:5052
+      - --init-slashing-protection
+      - --suggested-fee-recipient=0x5544596212F91984C986A919C8026DF0576816f9
+
+  # The alt-mempool sidecar. Two changes from the stock image. README.md gives
+  # the reason for each one:
+  #   1. patches/validationPrefix.js reads the verify gas budget from the env.
+  #   2. config/sidecar.json lists the precompiles for rule COD-010.
+  sidecar:
+    <<: *service-defaults
+    image: ghcr.io/forshtat/mempool-workshop-sidecar@sha256:c4cdc5c707d94f3968566ba34904d1a7c4ab4dee962d822e1bac1bf6714e022e # tag latest, built 2026-10-25
+    platform: linux/amd64
+    depends_on:
+      ethrex:
+        condition: service_started
+    environment:
+      - SKANDHA_MAX_VERIFY_GAS=2500000
+    volumes:
+      - ./config/sidecar.json:/usr/app/config.json:ro
+      - ./patches/validationPrefix.js:/usr/app/packages/executor/lib/services/UserOpValidation/utils/validationPrefix.js:ro
+      - ${WAVE_DEVNET_DATA:-./.data}/sidecar:/usr/app/data
+    ports:
+      - "127.0.0.1:${WAVE_SIDECAR_PORT:-14337}:14337/tcp"
+    command:
+      - standalone
+      - --configFile=/usr/app/config.json
+      - --dataDir=/usr/app/data
+      - --api.address=0.0.0.0
+      - --api.port=14337
+      - --api.wsPort=14337
+      - --executor.bundlingMode=auto
+      - --redirectRpc
+      - --explorer.enable
+
+  # The explorer UI ships in the sidecar image. The image digest pins its source
+  # and vite 8.3.1. The entrypoint runs the vite binary in the image, so nothing
+  # comes from the network at start. The browser reads the sidecar on localhost.
+  explorer:
+    <<: *service-defaults
+    image: ghcr.io/forshtat/mempool-workshop-sidecar@sha256:c4cdc5c707d94f3968566ba34904d1a7c4ab4dee962d822e1bac1bf6714e022e # tag latest, built 2026-10-25
+    platform: linux/amd64
+    working_dir: /usr/app/packages/devnet-ui
+    environment:
+      - 'VITE_EXPLORER_INSTANCES=[{"name":"Local sidecar","url":"http://localhost:${WAVE_SIDECAR_PORT:-14337}/rpc"}]'
+    ports:
+      - "127.0.0.1:${WAVE_EXPLORER_PORT:-5173}:5173/tcp"
+    entrypoint:
+      - bun
+      - --bun
+      - /usr/app/node_modules/vite/bin/vite.js
+      - --host=0.0.0.0
+      - --port=5173
+      - --strictPort
