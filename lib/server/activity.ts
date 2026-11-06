@@ -1,5 +1,5 @@
 // GET /api/activity: an index of the chain, built by reading each block once. Server side only.
-import { decodeEventLog, parseAbiItem, type Address, type Hex } from 'viem'
+import { decodeEventLog, parseAbiItem, toFunctionSelector, type Address, type Hex } from 'viem'
 import type { ActivityItem, MethodRef } from '../api-types'
 import { ETH_TOKEN } from '../api-types'
 import { RPC_URL, genesisHash, rpc, type Deployment } from '../chain'
@@ -11,6 +11,7 @@ const MAX_ITEMS = 50
 const BLOCKS_AT_ONCE = 20
 const TRANSFER = parseAbiItem('event Transfer(address indexed from, address indexed to, uint256 value)')
 const SENDER_MODE = 2
+const RUN_SCHEDULED = toFunctionSelector('executeScheduled(bytes32,bytes)')
 
 type RpcFrame = { mode: Hex; data: Hex }
 type RpcTx = {
@@ -18,6 +19,7 @@ type RpcTx = {
   to?: Address | null
   from: Address
   value?: Hex
+  input?: Hex
   sender?: Address
   nonceKeys?: Hex[]
   frames?: RpcFrame[]
@@ -80,6 +82,23 @@ function indexFrameTx(index: Index, d: Deployment, tx: RpcTx, receipt: TxReceipt
   }
 }
 
+/** A queued action that a plain transaction ran. The owner approved it when it was queued. */
+function indexPlainRun(index: Index, d: Deployment, tx: RpcTx, receipt: TxReceipt, timestamp: number) {
+  const account = tx.to as Address
+  const { decoded } = describeSender(d, account, tx.input as Hex)
+  add(index, account, {
+    txHash: tx.hash,
+    title: decoded.title,
+    token: null,
+    amount: null,
+    counterparty: null,
+    direction: 'none',
+    method: null,
+    state: receipt.status === '0x1' ? 'included' : 'failed',
+    timestamp,
+  })
+}
+
 function indexTokenLogs(index: Index, d: Deployment, tx: RpcTx, receipt: TxReceipt, timestamp: number) {
   for (const log of receipt.logs) {
     if (log.address.toLowerCase() !== d.testUsdc.toLowerCase()) continue
@@ -102,6 +121,7 @@ async function indexBlock(index: Index, d: Deployment, number: number) {
     // above still rejects, so that block is read again.
     try {
       if (tx.frames) indexFrameTx(index, d, tx, receipt, timestamp)
+      else if (tx.to && tx.input?.startsWith(RUN_SCHEDULED)) indexPlainRun(index, d, tx, receipt, timestamp)
       else if (tx.to && BigInt(tx.value ?? '0x0') > 0n && receipt.status === '0x1') {
         add(index, tx.to, receivedItem(d, tx.hash, { token: ETH_TOKEN, to: tx.to, amount: BigInt(tx.value as Hex) }, tx.from, timestamp))
       }
