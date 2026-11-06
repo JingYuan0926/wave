@@ -1,6 +1,8 @@
 import { useEffect, useId, useRef, type ReactNode } from "react";
 import { ChevronLeft, ChevronRight, Fingerprint, Globe, Nfc, ScanFace, X, type LucideIcon } from "lucide-react";
-import type { MethodId } from "../data";
+import type { MethodId, Token } from "../data";
+import usdcIcon from "../assets/usdc.png";
+import usdtIcon from "../assets/usdt.png";
 import { initials } from "../lib/format";
 
 export const focusRing =
@@ -27,8 +29,8 @@ type PillProps = {
 export function Pill({ children, onClick, tone = "white", icon: Icon, trailingIcon: Trailing }: PillProps) {
   const toneCls =
     tone === "accent"
-      ? "bg-wave-deep text-white shadow-[0_6px_20px_-6px_rgba(41,55,84,0.55)] hover:bg-[#1f2a40]"
-      : "bg-white text-ink border border-line shadow-[0_6px_20px_-8px_rgba(41,55,84,0.18)] hover:bg-surface";
+      ? "bg-wave-deep text-white shadow-[0_6px_20px_-6px_rgba(0,0,0,0.55)] hover:bg-[#262626]"
+      : "bg-white text-ink border border-line shadow-[0_6px_20px_-8px_rgba(0,0,0,0.18)] hover:bg-surface";
   return (
     <button
       type="button"
@@ -56,8 +58,8 @@ export function PrimaryButton({
   tone?: "deep" | "accent" | "ghost";
 }) {
   const toneCls = {
-    deep: "bg-wave-deep text-white hover:bg-[#1f2a40]", // darker shade of wave-deep for hover
-    accent: "bg-wave-deep text-white hover:bg-[#1f2a40]",
+    deep: "bg-wave-deep text-white hover:bg-[#262626]", // darker shade of wave-deep for hover
+    accent: "bg-wave-deep text-white hover:bg-[#262626]",
     ghost: "bg-surface text-ink hover:bg-surface-2",
   }[tone];
   return (
@@ -102,7 +104,7 @@ export function BackButton({ onClick }: { onClick: () => void }) {
       type="button"
       onClick={onClick}
       aria-label="Back"
-      className={`grid size-11 place-items-center rounded-full border border-line bg-white shadow-[0_6px_20px_-8px_rgba(41,55,84,0.18)] hover:bg-surface ${focusRing}`}
+      className={`grid size-11 place-items-center rounded-full border border-line bg-white shadow-[0_6px_20px_-8px_rgba(0,0,0,0.18)] hover:bg-surface ${focusRing}`}
     >
       <ChevronLeft className="size-5" aria-hidden />
     </button>
@@ -172,7 +174,7 @@ export function ListRow({
 }
 
 export function Avatar({ name, size = "md" }: { name: string; size?: "md" | "lg" }) {
-  const palette = ["bg-wave-soft text-wave-deep", "bg-[#ece8ff] text-[#3d2a8a]", "bg-[#ffeadd] text-[#8a3a0a]", "bg-[#eef0f4] text-[#4a5670]"];
+  const palette = ["bg-wave-soft text-ink", "bg-surface-2 text-ink"];
   const idx = [...name].reduce((n, c) => n + c.charCodeAt(0), 0) % palette.length;
   const sz = size === "lg" ? "size-14 text-lg" : "size-12 text-base";
   return (
@@ -253,30 +255,6 @@ export function Sheet({ title, onClose, children }: { title: string; onClose: ()
 
 /* ---------- Brand art ---------- */
 
-export function WaveBand({ variant = "ocean" }: { variant?: "ocean" | "dusk" }) {
-  const id = useId();
-  const stops =
-    variant === "ocean"
-      ? ["#0a4a57", "#1497a8", "#5fe0e8"]
-      : ["#3a2a7a", "#7b5bd6", "#c8b8ff"];
-  return (
-    <svg viewBox="0 0 320 88" preserveAspectRatio="none" className="absolute inset-0 size-full" aria-hidden>
-      <defs>
-        <linearGradient id={`${id}-g`} x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stopColor={stops[0]} />
-          <stop offset="0.55" stopColor={stops[1]} />
-          <stop offset="1" stopColor={stops[2]} />
-        </linearGradient>
-      </defs>
-      <rect width="320" height="88" fill={`url(#${id}-g)`} />
-      <path d="M0 40 C 50 22, 95 58, 150 38 S 250 18, 320 34 V88 H0Z" fill="#fff" opacity="0.12" />
-      <path d="M0 54 C 60 38, 115 74, 180 52 S 280 40, 320 52 V88 H0Z" fill="#fff" opacity="0.16" />
-      <path d="M0 66 C 70 54, 125 84, 200 66 S 290 58, 320 66 V88 H0Z" fill="#fff" opacity="0.2" />
-      <path d="M0 78 C 80 70, 130 92, 210 78 S 300 72, 320 78 V88 H0Z" fill="#f2f5f7" />
-    </svg>
-  );
-}
-
 export function WaveMark({ className = "" }: { className?: string }) {
   return (
     <svg viewBox="0 0 32 32" className={className} aria-hidden fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round">
@@ -286,15 +264,15 @@ export function WaveMark({ className = "" }: { className?: string }) {
   );
 }
 
-export function TokenIcon({ token }: { token: "USDC" | "ETH" }) {
-  // Neutral token glyphs; not the official logos.
-  return token === "USDC" ? (
-    <span className="grid size-8 place-items-center rounded-full bg-[#2775ca] text-sm font-bold text-white" aria-hidden>
-      $
-    </span>
-  ) : (
-    <span className="grid size-8 place-items-center rounded-full bg-[#5b6fd8] text-sm font-bold text-white" aria-hidden>
-      Ξ
-    </span>
+const TOKEN_ICON: Record<Token, string> = { USDC: usdcIcon, USDT: usdtIcon };
+
+export function TokenIcon({ token, size = "md" }: { token: Token; size?: "md" | "sm" }) {
+  return (
+    <img
+      src={TOKEN_ICON[token]}
+      alt=""
+      aria-hidden
+      className={`${size === "sm" ? "size-6" : "size-8"} shrink-0 rounded-full`}
+    />
   );
 }

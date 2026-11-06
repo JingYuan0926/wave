@@ -9,11 +9,9 @@ import { METHOD_ICON, PrimaryButton, Sheet, focusRing } from "../components/ui";
 import { ApprovingView, DoneView } from "../components/Approving";
 
 const DESIGN_NAMES: Record<CardDesign, string> = {
-  ocean: "Ocean",
-  dusk: "Dusk",
-  coral: "Coral",
-  mint: "Mint",
-  night: "Night",
+  navy: "Navy",
+  slate: "Slate",
+  midnight: "Midnight",
 };
 
 type NewKind = "passkey" | "nfc";
@@ -33,7 +31,7 @@ export function CreateCardSheet({ kind: initialKind, onClose }: { kind?: NewKind
   const [kind, setKind] = useState<NewKind | undefined>(
     initialKind && available.includes(initialKind) ? initialKind : available[0],
   );
-  const [design, setDesign] = useState<CardDesign>("coral");
+  const [design, setDesign] = useState<CardDesign>("navy");
   const [step, setStep] = useState<"form" | "approving" | "done">("form");
   const createdId = useRef<string | null>(null);
 

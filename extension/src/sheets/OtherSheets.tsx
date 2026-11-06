@@ -38,7 +38,7 @@ export function ReceiveSheet({ onClose }: { onClose: () => void }) {
 
   return (
     <Sheet title="Receive money" onClose={onClose}>
-      <p className="text-[15px] leading-relaxed text-ink-2">Send USDC or ETH on the WAVE devnet to this address.</p>
+      <p className="text-[15px] leading-relaxed text-ink-2">Send USDC or USDT on the WAVE devnet to this address.</p>
       <div className="mt-4 rounded-[24px] bg-surface p-5">
         <p className="text-sm text-muted">{state.wallet.name}</p>
         <p className="mt-1 break-all font-mono text-lg leading-relaxed">{address}</p>

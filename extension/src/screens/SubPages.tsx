@@ -4,7 +4,7 @@ import { METHOD_INFO, RULES, type MethodKind, type Token } from "../data";
 import { fmtToken } from "../lib/format";
 import { hoursLeft, useNow, useStore } from "../store";
 import type { Nav } from "../nav";
-import { BackButton, MethodChip, PageTitle, TopBar, focusRing } from "../components/ui";
+import { BackButton, MethodChip, PageTitle, TokenIcon, TopBar, focusRing } from "../components/ui";
 import { METHOD_KIND_ICON } from "../components/CardHolder";
 
 /* ---------- Spending limits ---------- */
@@ -27,16 +27,17 @@ export function SpendingLimits({ nav }: { nav: Nav }) {
       <PageTitle sub="Each amount has its own approval method and timing.">Your spending limits</PageTitle>
 
       <div className="mx-5 inline-flex rounded-full bg-surface p-1" role="group" aria-label="Token">
-        {(["USDC", "ETH"] as const).map((t) => (
+        {(["USDC", "USDT"] as const).map((t) => (
           <button
             key={t}
             type="button"
             aria-pressed={token === t}
             onClick={() => setToken(t)}
-            className={`h-10 rounded-full px-5 text-[15px] font-semibold transition-colors ${
+            className={`flex h-10 items-center gap-2 rounded-full pl-2 pr-5 text-[15px] font-semibold transition-colors ${
               token === t ? "bg-white text-ink shadow-sm" : "text-ink-2 hover:text-ink"
             } ${focusRing}`}
           >
+            <TokenIcon token={t} size="sm" />
             {t}
           </button>
         ))}
@@ -198,7 +199,7 @@ function MethodRow({
           onClick={action.onClick}
           disabled={action.disabled}
           className={`h-10 shrink-0 rounded-full px-4 text-[15px] font-semibold ${
-            action.disabled ? "bg-warn-soft text-warn" : "bg-wave-deep text-white hover:bg-[#1f2a40]"
+            action.disabled ? "bg-warn-soft text-warn" : "bg-wave-deep text-white hover:bg-[#262626]"
           } ${focusRing}`}
         >
           {action.label}

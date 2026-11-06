@@ -16,7 +16,7 @@ import {
   ShieldPlus,
   X,
 } from "lucide-react";
-import { ETH_USD, METHOD_INFO } from "../data";
+import { METHOD_INFO } from "../data";
 import { fmtToken, fmtUsd } from "../lib/format";
 import { agentToCard, methodToCard } from "../lib/cards";
 import { useNow, useStore } from "../store";
@@ -28,7 +28,8 @@ import { CardHolder, HolderChip, HolderRow, HolderTitle, cardCountLabel } from "
 export function Home({ nav }: { nav: Nav }) {
   const { state, toggleHide, dismissPromo } = useStore();
   const now = useNow(60_000);
-  const total = state.wallet.balances.USDC + state.wallet.balances.ETH * ETH_USD;
+  // Both tokens are dollar stablecoins, so the total is their sum.
+  const total = state.wallet.balances.USDC + state.wallet.balances.USDT;
 
   // Recovery needs two methods besides World ID.
   const backups = state.cards.filter((c) => c.kind !== "worldid" && c.activeAt <= now).length;
@@ -73,7 +74,7 @@ export function Home({ nav }: { nav: Nav }) {
         <button
           type="button"
           onClick={() => nav.openSheet({ type: "scan" })}
-          className={`inline-flex h-11 shrink-0 items-center gap-2 rounded-full bg-wave-deep px-4 text-base font-semibold text-white hover:bg-[#1f2a40] active:scale-[0.97] ${focusRing}`}
+          className={`inline-flex h-11 shrink-0 items-center gap-2 rounded-full bg-wave-deep px-4 text-base font-semibold text-white hover:bg-[#262626] active:scale-[0.97] ${focusRing}`}
         >
           <ScanLine className="size-[18px]" aria-hidden /> Scan
         </button>
@@ -88,7 +89,7 @@ export function Home({ nav }: { nav: Nav }) {
             key={label}
             type="button"
             onClick={fn}
-            className={`inline-flex h-11 shrink-0 items-center rounded-full bg-wave-soft px-4 text-base font-semibold hover:bg-[#d3f8ea] active:scale-[0.97] ${focusRing}`}
+            className={`inline-flex h-11 shrink-0 items-center rounded-full bg-wave-soft px-4 text-base font-semibold hover:bg-[#e2e2e2] active:scale-[0.97] ${focusRing}`}
           >
             {label}
           </button>
@@ -221,7 +222,7 @@ function HolderCarousel({ nav }: { nav: Nav }) {
           >
             <HolderTitle onClick={() => nav.openSub("account")}>{state.wallet.name}</HolderTitle>
             <ul className="mt-3">
-              {(["USDC", "ETH"] as const).map((t) => (
+              {(["USDC", "USDT"] as const).map((t) => (
                 <li key={t}>
                   <HolderRow lead={<TokenIcon token={t} />} onClick={() => nav.openSub("account")}>
                     {state.hideBalance ? "••••" : fmtToken(state.wallet.balances[t], t)}

@@ -1,11 +1,7 @@
 import type { Token } from "../data";
 
 export function fmtToken(amount: number, token: Token) {
-  const digits = token === "ETH" ? 4 : 2;
-  const n = amount.toLocaleString("en-US", {
-    minimumFractionDigits: token === "ETH" ? 0 : 2,
-    maximumFractionDigits: digits,
-  });
+  const n = amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   return `${n} ${token}`;
 }
 

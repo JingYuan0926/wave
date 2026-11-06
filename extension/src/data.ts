@@ -1,7 +1,7 @@
 // Sample wallet data for the UI. Swap these for onchain reads when the
 // contracts are deployed.
 
-export type Token = "USDC" | "ETH";
+export type Token = "USDC" | "USDT";
 export type MethodId = "worldid" | "faceid" | "nfc";
 
 export const METHOD_LABEL: Record<MethodId, string> = {
@@ -9,8 +9,6 @@ export const METHOD_LABEL: Record<MethodId, string> = {
   faceid: "Face ID",
   nfc: "NFC card",
 };
-
-export const ETH_USD = 3120;
 
 export type Tier = {
   /** Upper amount per transfer. null = no upper bound. */
@@ -26,9 +24,9 @@ export const RULES: Record<Token, Tier[]> = {
     { upTo: 1000, method: "worldid", delayHours: 0, cap: { amount: 2000, per: "week", used: 450 } },
     { upTo: null, method: "worldid", delayHours: 24 },
   ],
-  ETH: [
-    { upTo: 0.03, method: "faceid", delayHours: 0, cap: { amount: 0.1, per: "day", used: 0.02 } },
-    { upTo: 0.3, method: "worldid", delayHours: 0, cap: { amount: 0.6, per: "week", used: 0.05 } },
+  USDT: [
+    { upTo: 100, method: "faceid", delayHours: 0, cap: { amount: 300, per: "day", used: 40 } },
+    { upTo: 1000, method: "worldid", delayHours: 0, cap: { amount: 2000, per: "week", used: 200 } },
     { upTo: null, method: "worldid", delayHours: 24 },
   ],
 };
@@ -64,10 +62,10 @@ export type Wallet = {
 export const WALLET: Wallet = {
   name: "Main wallet",
   address: "0x8e41C2a0b5d7F3e19A6c04B2d9E7f15a3C60bD27",
-  balances: { USDC: 1034.5, ETH: 0.082 },
+  balances: { USDC: 1034.5, USDT: 256.2 },
 };
 
-export type CardDesign = "ocean" | "dusk" | "coral" | "mint" | "night";
+export type CardDesign = "navy" | "slate" | "midnight";
 
 /** Each approval method is a card in the wallet's card holder. */
 export type MethodKind = "worldid" | "faceid" | "passkey" | "nfc";
@@ -88,8 +86,8 @@ export const METHOD_INFO: Record<MethodKind, { name: string; approves: string }>
 };
 
 export const METHOD_CARDS: MethodCard[] = [
-  { id: "m1", kind: "worldid", design: "night", activeAt: 0 },
-  { id: "m2", kind: "faceid", design: "mint", activeAt: 0 },
+  { id: "m1", kind: "worldid", design: "navy", activeAt: 0 },
+  { id: "m2", kind: "faceid", design: "slate", activeAt: 0 },
 ];
 
 export type Recipient = {
@@ -124,7 +122,7 @@ export const TRANSACTIONS: Tx[] = [
   { id: "t1", kind: "out", title: "To Priya Sharma", subtitle: "Face ID · Today, 12:41", amount: 50, token: "USDC", method: "faceid" },
   { id: "t2", kind: "in", title: "From Arjun Mehta", subtitle: "Today, 09:15", amount: 120, token: "USDC" },
   { id: "t3", kind: "out", title: "To Chai Point Bandra", subtitle: "Face ID · Yesterday", amount: 3.5, token: "USDC", method: "faceid" },
-  { id: "t4", kind: "out", title: "To Kavya Iyer", subtitle: "World ID · Mon", amount: 0.05, token: "ETH", method: "worldid" },
+  { id: "t4", kind: "out", title: "To Kavya Iyer", subtitle: "World ID · Mon", amount: 145, token: "USDT", method: "worldid" },
   { id: "t5", kind: "config", title: "Face ID added", subtitle: "World ID · after 48h delay · Sun" },
   { id: "t6", kind: "in", title: "Account funded", subtitle: "Sat", amount: 1000, token: "USDC" },
 ];
@@ -178,7 +176,7 @@ export type Agent = {
 };
 
 export const AGENTS: Agent[] = [
-  { id: "a1", name: "Grocery runner", purpose: "Reorders weekly groceries", limit: 60, per: "week", used: 38.4, active: true, design: "coral" },
-  { id: "a2", name: "Subscriptions", purpose: "Pays Spotify and iCloud", limit: 25, per: "month", used: 19.99, active: true, design: "mint" },
-  { id: "a3", name: "Travel booker", purpose: "Books trains and flights", limit: 400, per: "month", used: 0, active: false, design: "dusk" },
+  { id: "a1", name: "Grocery runner", purpose: "Reorders weekly groceries", limit: 60, per: "week", used: 38.4, active: true, design: "navy" },
+  { id: "a2", name: "Subscriptions", purpose: "Pays Spotify and iCloud", limit: 25, per: "month", used: 19.99, active: true, design: "slate" },
+  { id: "a3", name: "Travel booker", purpose: "Books trains and flights", limit: 400, per: "month", used: 0, active: false, design: "midnight" },
 ];

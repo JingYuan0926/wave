@@ -30,7 +30,7 @@ type State = {
 };
 
 const uid = () => Math.random().toString(36).slice(2, 10);
-const DESIGNS: CardDesign[] = ["coral", "mint", "dusk", "ocean", "night"];
+const DESIGNS: CardDesign[] = ["navy", "slate", "midnight"];
 
 function useStoreState() {
   const [state, setState] = useState<State>({

@@ -67,7 +67,7 @@ export function Recipients({ nav }: { nav: Nav }) {
           <button
             type="button"
             onClick={() => nav.openSheet({ type: "addRecipient" })}
-            className={`mt-4 h-11 rounded-full bg-wave-soft px-5 text-[15px] font-semibold hover:bg-[#d3f8ea] ${focusRing}`}
+            className={`mt-4 h-11 rounded-full bg-wave-soft px-5 text-[15px] font-semibold hover:bg-[#e2e2e2] ${focusRing}`}
           >
             Add recipient
           </button>

@@ -4,7 +4,7 @@ import { METHOD_LABEL, tierFor, type MethodId, type Token } from "../data";
 import { fmtToken, shortAddr } from "../lib/format";
 import { requestApproval } from "../lib/approvals";
 import { useStore } from "../store";
-import { Avatar, METHOD_ICON, PrimaryButton, Sheet, focusRing } from "../components/ui";
+import { Avatar, METHOD_ICON, PrimaryButton, Sheet, TokenIcon, focusRing } from "../components/ui";
 import { ApprovingView, DoneView } from "../components/Approving";
 
 type Step = "form" | "review" | "approving" | "done";
@@ -92,14 +92,15 @@ export function SendSheet({ onClose, recipientId }: { onClose: () => void; recip
                 Amount
               </label>
               <div className="inline-flex rounded-full bg-white p-1 ring-1 ring-line" role="group" aria-label="Token">
-                {(["USDC", "ETH"] as const).map((t) => (
+                {(["USDC", "USDT"] as const).map((t) => (
                   <button
                     key={t}
                     type="button"
                     aria-pressed={token === t}
                     onClick={() => setToken(t)}
-                    className={`h-8 rounded-full px-3 text-sm font-semibold ${token === t ? "bg-ink text-white" : "text-ink-2"} ${focusRing}`}
+                    className={`flex h-8 items-center gap-1.5 rounded-full pl-1 pr-3 text-sm font-semibold ${token === t ? "bg-ink text-white" : "text-ink-2"} ${focusRing}`}
                   >
+                    <TokenIcon token={t} size="sm" />
                     {t}
                   </button>
                 ))}
@@ -119,7 +120,7 @@ export function SendSheet({ onClose, recipientId }: { onClose: () => void; recip
                 const v = e.target.value.replace(",", ".");
                 if (/^\d*\.?\d{0,6}$/.test(v)) setRaw(v);
               }}
-              className="mt-2 w-full bg-transparent text-[2.5rem] font-bold tabular-nums tracking-tight outline-none placeholder:text-[#b5bccb]"
+              className="mt-2 w-full bg-transparent text-[2.5rem] font-bold tabular-nums tracking-tight outline-none placeholder:text-[#b3b3b3]"
             />
             <p id="amount-help" className={`text-sm ${overBalance ? "font-semibold text-danger" : "text-muted"}`}>
               {overBalance ? `More than your balance of ${fmtToken(balance, token)}` : `Balance: ${fmtToken(balance, token)}`}

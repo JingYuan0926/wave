@@ -5,23 +5,23 @@
 @theme {
   --font-sans: "Plus Jakarta Sans Variable", ui-sans-serif, system-ui, sans-serif;
 
-  --color-ink: #293754;
-  --color-ink-2: #4a5670;
-  --color-muted: #5f6a80;
-  --color-line: #e7eaf0;
-  --color-surface: #f3f4f7;
-  --color-surface-2: #e7eaf0;
+  --color-ink: #0a0a0a;
+  --color-ink-2: #333333;
+  --color-muted: #666666;
+  --color-line: #e5e5e5;
+  --color-surface: #f4f4f4;
+  --color-surface-2: #e8e8e8;
 
-  --color-wave: #c2fae5;
-  --color-wave-soft: #e4fdf4;
-  --color-wave-mist: #e4fdf4;
-  --color-wave-deep: #293754;
+  --color-wave: #dcdcdc;
+  --color-wave-soft: #f0f0f0;
+  --color-wave-mist: #f4f4f4;
+  --color-wave-deep: #0a0a0a;
 
-  --color-positive: #0f7a4d;
+  --color-positive: #0a0a0a;
   --color-danger: #b42318;
   --color-danger-soft: #fdecea;
-  --color-warn: #8a5300;
-  --color-warn-soft: #fff4e0;
+  --color-warn: #555555;
+  --color-warn-soft: #f0f0f0;
 
   --animate-sheet-in: sheet-in 340ms cubic-bezier(0.32, 0.72, 0, 1);
   --animate-fade-in: fade-in 200ms ease-out;
