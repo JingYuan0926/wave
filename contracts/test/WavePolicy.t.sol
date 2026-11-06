@@ -21,7 +21,7 @@ contract Harness is WavePolicy {
         return approver;
     }
 
-    function _worldId() internal view override returns (address) {
+    function _ownerValidator() internal view override returns (address) {
         return world;
     }
 
@@ -50,11 +50,28 @@ contract Harness is WavePolicy {
     }
 
     function setTiers(address t, WaveTier[] calldata x) external {
-        _setTiers(t, x);
+        _setRules(t, x, _l().dailyLimit[t]);
     }
 
     function tighten(address t, WaveTier[] calldata x) external {
-        _tighten(t, x);
+        _tighten(t, x, _l().dailyLimit[t]);
+    }
+
+    function setRules(address t, WaveTier[] calldata x, uint96 limit) external {
+        _setRules(t, x, limit);
+    }
+
+    function tightenWith(address t, WaveTier[] calldata x, uint96 limit) external {
+        _tighten(t, x, limit);
+    }
+
+    /// The master path of an agent wallet writes tiers and leaves the daily limit alone.
+    function agentSetTiers(address t, WaveTier[] calldata x) external {
+        _setTiers(t, x);
+    }
+
+    function agentTighten(address t, WaveTier[] calldata x) external {
+        _tightenRules(t, x);
     }
 
     function enforce(address target, uint256 value, bytes calldata data) external {
@@ -88,6 +105,8 @@ contract WavePolicyTest is Test {
     address constant CARD = address(0xA3);
     address constant SYNCED = address(0xA4);
     address constant STRANGER = address(0xA5);
+    address constant OWNER_KEY = address(0xA6);
+    address constant ETH = address(0);
     address constant USDC = address(0xC0);
     address constant OTHER_TOKEN = address(0xC1);
     address constant TO = address(0xD0);
@@ -442,7 +461,7 @@ contract WavePolicyTest is Test {
     function test_onlyWorldIdCancelsRecovery() public {
         h.setApprover(PASSKEY);
         bytes32 id = h.schedule(1, _config(IWaveConfig.setOwner.selector), 0);
-        vm.expectRevert(WavePolicy.OnlyWorldId.selector);
+        vm.expectRevert(WavePolicy.OnlyOwnerMethod.selector);
         h.cancel(id);
         h.setApprover(WORLD);
         h.cancel(id);
@@ -586,5 +605,511 @@ contract WavePolicyTest is Test {
         h.enroll(STRANGER, 6, false);
         vm.expectRevert(abi.encodeWithSelector(WavePolicy.BadMethodBit.selector, P));
         h.enroll(STRANGER, P, false);
+    }
+
+    // The owner method can be a passkey. These cases run the same rules with no World ID.
+
+    function _passkeyOwned() internal returns (Harness o) {
+        o = new Harness(OWNER_KEY, USDC);
+        o.enroll(PASSKEY, P, false);
+        o.enroll(CARD, C, false);
+    }
+
+    function _batchOn(address target, bytes4 selector) internal pure returns (bytes memory) {
+        return _batch(target, 0, abi.encodeWithSelector(selector, uint256(1)));
+    }
+
+    function test_ownerPasskey_defaultRuleAndFullBit() public {
+        Harness o = _passkeyOwned();
+        assertEq(o.methodBitOf(OWNER_KEY), o.OWNER_BIT());
+        o.setApprover(OWNER_KEY);
+        o.enforce(address(0xBEEF), 1 ether, "");
+        o.enforce(USDC, 0, _transfer(1_000_000e6));
+        o.setApprover(PASSKEY);
+        vm.expectRevert(abi.encodeWithSelector(WavePolicy.MethodNotAllowed.selector, PASSKEY));
+        o.enforce(USDC, 0, _transfer(1));
+    }
+
+    function test_ownerPasskey_isNeverLimitedToSmallTiers() public {
+        Harness o = _passkeyOwned();
+        // A large tier with no small mark. The owner bit is never in the synced mask.
+        o.setTiers(USDC, _one(WaveTier(NO_LIMIT, 0, 0, 0, W)));
+        o.setApprover(OWNER_KEY);
+        o.enforce(USDC, 0, _transfer(500e6));
+        assertEq(o.syncedMask() & o.OWNER_BIT(), 0);
+    }
+
+    function test_ownerPasskey_cannotEnrollWithTheOwnerBit() public {
+        Harness o = _passkeyOwned();
+        vm.expectRevert(abi.encodeWithSelector(WavePolicy.BadMethodBit.selector, uint8(1)));
+        o.enroll(STRANGER, 1, true);
+    }
+
+    function test_ownerPasskey_queuesConfig_otherMethodsCannot() public {
+        Harness o = _passkeyOwned();
+        bytes memory batch = _batchOn(address(o), IWaveConfig.setTiers.selector);
+        o.setApprover(STRANGER);
+        vm.expectRevert(abi.encodeWithSelector(WavePolicy.MethodNotAllowed.selector, STRANGER));
+        o.schedule(0, batch, bytes32(uint256(1)));
+        o.setApprover(PASSKEY);
+        vm.expectRevert(abi.encodeWithSelector(WavePolicy.MethodNotAllowed.selector, PASSKEY));
+        o.schedule(0, batch, bytes32(uint256(1)));
+        o.setApprover(OWNER_KEY);
+        bytes32 id = o.schedule(0, batch, bytes32(uint256(1)));
+        assertEq(o.pendingOf(id).notBefore, block.timestamp + 48 hours);
+    }
+
+    function test_ownerPasskey_recoveryByTwoOthers_onlyOwnerCancels() public {
+        Harness o = _passkeyOwned();
+        bytes memory batch = _batchOn(address(o), IWaveConfig.setOwnerKey.selector);
+        o.setApprover(OWNER_KEY);
+        vm.expectRevert(abi.encodeWithSelector(WavePolicy.MethodNotAllowed.selector, OWNER_KEY));
+        o.schedule(1, batch, bytes32(uint256(2)));
+        o.setApprover(PASSKEY);
+        bytes32 id = o.schedule(1, batch, bytes32(uint256(2)));
+        o.setApprover(CARD);
+        o.approveRecovery(id);
+        assertEq(o.pendingOf(id).notBefore, block.timestamp + 7 days);
+        vm.expectRevert(WavePolicy.OnlyOwnerMethod.selector);
+        o.cancel(id);
+        o.setApprover(OWNER_KEY);
+        o.cancel(id);
+        assertEq(o.pendingOf(id).status, o.STATUS_CANCELLED());
+    }
+
+    function test_setOwnerKeyIsAConfigCall() public {
+        h.setApprover(WORLD);
+        bytes32 id = h.schedule(0, _config(IWaveConfig.setOwnerKey.selector), bytes32(uint256(3)));
+        assertEq(h.pendingOf(id).notBefore, block.timestamp + 48 hours);
+    }
+
+    // The wait that the owner chose. The address commits to it.
+
+    function _tierDelayOn(uint32 delay) internal {
+        h.setTiers(USDC, _one(WaveTier(NO_LIMIT, 0, delay, 0, P | W)));
+    }
+
+    function test_noWait_loosenRunsInTheSameBlock() public {
+        h.setDemo(h.NO_WAIT());
+        h.setApprover(WORLD);
+        bytes memory batch = _config(IWaveConfig.setTiers.selector);
+        bytes32 id = h.schedule(0, batch, bytes32(uint256(4)));
+        assertEq(_notBefore(id), block.timestamp);
+        h.consume(id, batch);
+    }
+
+    function test_noWait_appliesToEachPolicyDelay() public {
+        h.setDemo(h.NO_WAIT());
+        assertEq(h.effectiveDelay(h.CONFIG_DELAY()), 0);
+        assertEq(h.effectiveDelay(h.OTHER_CALL_DELAY()), 0);
+        assertEq(h.effectiveDelay(h.RECOVERY_DELAY()), 0);
+    }
+
+    function test_noWait_stillNeedsTheOwnerMethod() public {
+        h.setDemo(h.NO_WAIT());
+        h.setApprover(PASSKEY);
+        vm.expectRevert(abi.encodeWithSelector(WavePolicy.MethodNotAllowed.selector, PASSKEY));
+        h.schedule(0, _config(IWaveConfig.setTiers.selector), bytes32(uint256(5)));
+    }
+
+    function test_noWait_recoveryStillNeedsTwoMethods() public {
+        h.setDemo(h.NO_WAIT());
+        h.setApprover(PASSKEY);
+        bytes memory r = _config(IWaveConfig.setOwner.selector);
+        bytes32 id = h.schedule(1, r, bytes32(uint256(6)));
+        vm.expectRevert(abi.encodeWithSelector(WavePolicy.BadStatus.selector, id, h.STATUS_COLLECTING()));
+        h.consume(id, r);
+        h.setApprover(CARD);
+        h.approveRecovery(id);
+        assertEq(_notBefore(id), block.timestamp);
+        h.consume(id, r);
+    }
+
+    function test_oneHourWait_refusesAnEarlyRun() public {
+        h.setDemo(1 hours);
+        h.setApprover(WORLD);
+        bytes memory batch = _config(IWaveConfig.setTiers.selector);
+        bytes32 id = h.schedule(0, batch, bytes32(uint256(7)));
+        assertEq(_notBefore(id), block.timestamp + 1 hours);
+        vm.warp(block.timestamp + 1 hours - 1);
+        vm.expectRevert(abi.encodeWithSelector(WavePolicy.TooEarly.selector, _notBefore(id)));
+        h.consume(id, batch);
+        vm.warp(block.timestamp + 1);
+        h.consume(id, batch);
+    }
+
+    function test_tierDelayStaysWithNoWait() public {
+        _tierDelayOn(24 hours);
+        h.setDemo(h.NO_WAIT());
+        h.setApprover(PASSKEY);
+        bytes32 id = h.schedule(0, _batch(USDC, 0, _transfer(5e6)), bytes32(uint256(8)));
+        assertEq(_notBefore(id), block.timestamp + 24 hours);
+    }
+
+    function test_tierDelayStaysWithAShorterWait() public {
+        _tierDelayOn(24 hours);
+        h.setDemo(1 hours);
+        h.setApprover(PASSKEY);
+        bytes32 id = h.schedule(0, _batch(USDC, 0, _transfer(5e6)), bytes32(uint256(9)));
+        assertEq(_notBefore(id), block.timestamp + 24 hours);
+    }
+
+    function test_mixedBatchTakesTheLongerOfWaitAndTier() public {
+        _tierDelayOn(24 hours);
+        h.setDemo(h.NO_WAIT());
+        h.setApprover(WORLD);
+        Execution[] memory two = new Execution[](2);
+        two[0] = Execution(address(h), 0, abi.encodeWithSelector(IWaveConfig.setTiers.selector, uint256(1)));
+        two[1] = Execution(USDC, 0, _transfer(5e6));
+        bytes32 id = h.schedule(0, abi.encode(two), bytes32(uint256(10)));
+        assertEq(_notBefore(id), block.timestamp + 24 hours);
+    }
+
+    // Hard daily limit ---------------------------------------------------
+
+    /// One open tier that every method can use, with a daily limit of 300.
+    function _limited() internal {
+        h.setRules(USDC, _open(), 300e6);
+    }
+
+    function _open() internal view returns (WaveTier[] memory t) {
+        t = new WaveTier[](1);
+        t[0] = WaveTier({upTo: type(uint96).max, cap: 0, delay: 0, period: 0, methods: W | P | C});
+    }
+
+    function _refused(address token, uint256 amount, uint256 left) internal {
+        vm.expectRevert(abi.encodeWithSelector(WavePolicy.DailyLimitReached.selector, token, amount, left));
+    }
+
+    function test_daily_stopsEveryMethod() public {
+        _limited();
+        h.setApprover(PASSKEY);
+        _spend(200e6);
+        h.setApprover(CARD);
+        _spend(100e6);
+        h.setApprover(PASSKEY);
+        _refused(USDC, 1, 0);
+        _spend(1);
+        h.setApprover(CARD);
+        _refused(USDC, 1, 0);
+        _spend(1);
+        h.setApprover(WORLD);
+        _refused(USDC, 1, 0);
+        _spend(1);
+    }
+
+    function test_daily_reportsTheAmountLeft() public {
+        _limited();
+        h.setApprover(WORLD);
+        _spend(250e6);
+        _refused(USDC, 51e6, 50e6);
+        _spend(51e6);
+        _spend(50e6);
+    }
+
+    function test_daily_aboveTheLimitInOneSend() public {
+        _limited();
+        h.setApprover(WORLD);
+        _refused(USDC, 301e6, 300e6);
+        _spend(301e6);
+    }
+
+    function test_daily_appliesToTheDefaultRule() public {
+        h.setRules(ETH, new WaveTier[](0), 2 ether);
+        h.setApprover(WORLD);
+        h.enforce(TO, 2 ether, "");
+        (, uint96 spent,,) = h.dailyOf(ETH);
+        assertEq(spent, 2 ether);
+        _refused(ETH, 1, 0);
+        h.enforce(TO, 1, "");
+    }
+
+    function test_daily_aHugeAmountDoesNotWrapTheCounter() public {
+        h.setRules(ETH, new WaveTier[](0), 2 ether);
+        h.setApprover(WORLD);
+        uint256 huge = uint256(type(uint96).max) + 1;
+        _refused(ETH, huge, 2 ether);
+        h.enforce(TO, huge, "");
+    }
+
+    function test_daily_aTierCapStillMovesASend_butTheLimitWins() public {
+        WaveTier[] memory t = new WaveTier[](2);
+        t[0] = WaveTier({upTo: 100e6, cap: 100e6, delay: 0, period: 1 days, methods: W | P | SMALL});
+        t[1] = WaveTier({upTo: type(uint96).max, cap: 0, delay: 0, period: 0, methods: W});
+        h.setRules(USDC, t, 150e6);
+        h.setApprover(PASSKEY);
+        _spend(100e6);
+        // The cap of the first tier is used up, so this send moves to the second tier.
+        vm.expectRevert(abi.encodeWithSelector(WavePolicy.MethodNotAllowed.selector, PASSKEY));
+        _spend(40e6);
+        h.setApprover(WORLD);
+        _spend(40e6);
+        assertEq(h.spentOf(USDC, 0), 100e6);
+        // The second tier has no cap, but the hard total still stops the owner method.
+        _refused(USDC, 40e6, 10e6);
+        _spend(40e6);
+    }
+
+    function test_daily_windowRestarts24HoursAfterTheFirstSend() public {
+        _limited();
+        h.setApprover(WORLD);
+        uint256 first = block.timestamp;
+        _spend(100e6);
+        vm.warp(first + 12 hours);
+        _spend(200e6);
+        (, , uint96 left, uint40 resetsAt) = h.dailyOf(USDC);
+        assertEq(left, 0);
+        assertEq(resetsAt, first + 24 hours);
+
+        vm.warp(first + 24 hours - 1);
+        _refused(USDC, 1, 0);
+        _spend(1);
+
+        vm.warp(first + 24 hours);
+        (, uint96 spent, uint96 full, uint40 ended) = h.dailyOf(USDC);
+        assertEq(spent, 0);
+        assertEq(full, 300e6);
+        assertEq(ended, 0);
+        _spend(300e6);
+        (, , , resetsAt) = h.dailyOf(USDC);
+        assertEq(resetsAt, first + 48 hours);
+    }
+
+    function test_daily_ethAndEachTokenHaveTheirOwnLimit() public {
+        _limited();
+        h.setRules(ETH, _open(), 1 ether);
+        h.setApprover(WORLD);
+        _spend(300e6);
+        h.enforce(TO, 1 ether, "");
+        _refused(USDC, 1, 0);
+        _spend(1);
+        _refused(ETH, 1, 0);
+        h.enforce(TO, 1, "");
+    }
+
+    function test_daily_zeroMeansNoLimit() public {
+        h.setRules(USDC, _open(), 0);
+        h.setApprover(WORLD);
+        _spend(1_000_000e6);
+        (uint96 limit, uint96 spent, uint96 left, uint40 resetsAt) = h.dailyOf(USDC);
+        assertEq(limit, 0);
+        assertEq(spent, 0);
+        assertEq(left, 0);
+        assertEq(resetsAt, 0);
+    }
+
+    function test_daily_batchSharesOneTotal() public {
+        _limited();
+        h.setApprover(PASSKEY);
+        h.enforce(USDC, 0, _transfer(150e6));
+        h.enforce(USDC, 0, _transfer(150e6));
+        _refused(USDC, 1, 0);
+        h.enforce(USDC, 0, _transfer(1));
+    }
+
+    function test_daily_previewGivesTheSameError() public {
+        _limited();
+        h.setApprover(WORLD);
+        _spend(300e6);
+        _refused(USDC, 1, 0);
+        h.checkTransfer(WORLD, USDC, 1);
+        _refused(USDC, 1, 0);
+        h.checkTransfer(PASSKEY, USDC, 1);
+    }
+
+    function _delayedTier() internal view returns (WaveTier[] memory t) {
+        t = _open();
+        t[0].delay = 1 hours;
+    }
+
+    function test_daily_scheduledTransferCountsOnce() public {
+        h.setRules(USDC, _delayedTier(), 300e6);
+        h.setApprover(WORLD);
+        bytes memory batch = _batch(USDC, 0, _transfer(200e6));
+        bytes32 id = h.schedule(0, batch, bytes32(uint256(1)));
+        (, uint96 spent, uint96 left,) = h.dailyOf(USDC);
+        assertEq(spent, 200e6);
+        assertEq(left, 100e6);
+
+        vm.warp(block.timestamp + 1 hours);
+        h.consume(id, batch);
+        (, spent, left,) = h.dailyOf(USDC);
+        assertEq(spent, 200e6, "execution counts nothing");
+        assertEq(left, 100e6);
+    }
+
+    function test_daily_scheduleAboveTheLimitReverts() public {
+        h.setRules(USDC, _delayedTier(), 300e6);
+        h.setApprover(WORLD);
+        h.schedule(0, _batch(USDC, 0, _transfer(200e6)), bytes32(uint256(1)));
+        _refused(USDC, 101e6, 100e6);
+        h.schedule(0, _batch(USDC, 0, _transfer(101e6)), bytes32(uint256(2)));
+    }
+
+    function test_daily_immediateAndScheduledShareOneTotal() public {
+        WaveTier[] memory t = new WaveTier[](2);
+        t[0] = WaveTier({upTo: 100e6, cap: 0, delay: 0, period: 0, methods: W | P});
+        t[1] = WaveTier({upTo: type(uint96).max, cap: 0, delay: 1 hours, period: 0, methods: W});
+        h.setRules(USDC, t, 300e6);
+        h.setApprover(PASSKEY);
+        _spend(100e6);
+        h.setApprover(WORLD);
+        h.schedule(0, _batch(USDC, 0, _transfer(200e6)), bytes32(uint256(1)));
+        h.setApprover(PASSKEY);
+        _refused(USDC, 1, 0);
+        _spend(1);
+    }
+
+    function test_daily_aRevertedDelayUndoesTheCount() public {
+        h.setRules(USDC, _delayedTier(), 300e6);
+        h.setApprover(WORLD);
+        vm.expectRevert(abi.encodeWithSelector(WavePolicy.NeedsSchedule.selector, uint32(1 hours)));
+        _spend(100e6);
+        (, uint96 spent,,) = h.dailyOf(USDC);
+        assertEq(spent, 0);
+    }
+
+    function test_daily_lowerLimitAppliesAtOnce_byAnyMethod() public {
+        _limited();
+        h.setApprover(PASSKEY);
+        _spend(100e6);
+        h.tightenWith(USDC, _open(), 120e6);
+        _refused(USDC, 21e6, 20e6);
+        _spend(21e6);
+        _spend(20e6);
+    }
+
+    function test_daily_lowerLimitBelowTheSpentAmountLeavesNothing() public {
+        _limited();
+        h.setApprover(WORLD);
+        _spend(200e6);
+        h.tightenWith(USDC, _open(), 50e6);
+        (uint96 limit, uint96 spent, uint96 left,) = h.dailyOf(USDC);
+        assertEq(limit, 50e6);
+        assertEq(spent, 200e6);
+        assertEq(left, 0);
+        _refused(USDC, 1, 0);
+        _spend(1);
+    }
+
+    function test_daily_addALimitByAnyMethod() public {
+        h.setRules(USDC, _open(), 0);
+        h.setApprover(CARD);
+        h.tightenWith(USDC, _open(), 10e6);
+        (uint96 limit,,,) = h.dailyOf(USDC);
+        assertEq(limit, 10e6);
+    }
+
+    function test_daily_addALimitOnTheDefaultRule() public {
+        WaveTier[] memory t = new WaveTier[](1);
+        t[0] = WaveTier({upTo: type(uint96).max, cap: 0, delay: 0, period: 0, methods: W});
+        h.setApprover(WORLD);
+        h.tightenWith(ETH, t, 1 ether);
+        h.enforce(TO, 1 ether, "");
+        _refused(ETH, 1, 0);
+        h.enforce(TO, 1, "");
+    }
+
+    function test_daily_tightenCannotRaiseOrRemove() public {
+        _limited();
+        h.setApprover(WORLD);
+        WaveTier[] memory t = _open();
+        vm.expectRevert(abi.encodeWithSelector(WavePolicy.NotStricter.selector, type(uint256).max));
+        h.tightenWith(USDC, t, 300e6 + 1);
+        vm.expectRevert(abi.encodeWithSelector(WavePolicy.NotStricter.selector, type(uint256).max));
+        h.tightenWith(USDC, t, 0);
+        h.tightenWith(USDC, t, 300e6); // The same limit is allowed.
+    }
+
+    function test_daily_tightenNeedsAnEnrolledMethod() public {
+        _limited();
+        h.setApprover(STRANGER);
+        vm.expectRevert(abi.encodeWithSelector(WavePolicy.NotEnrolled.selector, STRANGER));
+        h.tightenWith(USDC, _open(), 1);
+    }
+
+    function test_daily_lowerLimitStopsAQueuedTransfer() public {
+        h.setRules(USDC, _delayedTier(), 300e6);
+        h.setApprover(WORLD);
+        bytes memory batch = _batch(USDC, 0, _transfer(100e6));
+        bytes32 id = h.schedule(0, batch, bytes32(uint256(1)));
+        h.tightenWith(USDC, _delayedTier(), 200e6);
+        vm.warp(block.timestamp + 1 hours);
+        vm.expectRevert(abi.encodeWithSelector(WavePolicy.RuleChanged.selector, USDC));
+        h.consume(id, batch);
+    }
+
+    function test_daily_raiseKeepsTheWindow() public {
+        _limited();
+        h.setApprover(WORLD);
+        _spend(300e6);
+        h.setRules(USDC, _open(), 500e6);
+        _refused(USDC, 201e6, 200e6);
+        _spend(201e6);
+        _spend(200e6);
+    }
+
+    function test_daily_removeEndsTheStop() public {
+        _limited();
+        h.setApprover(WORLD);
+        _spend(300e6);
+        h.setRules(USDC, _open(), 0);
+        _spend(300e6);
+    }
+
+    function test_daily_raiseIsAConfigCall_ownerAndWait() public {
+        _limited();
+        bytes memory batch =
+            _batch(address(h), 0, abi.encodeWithSelector(IWaveConfig.setTiers.selector, USDC, _open(), uint96(500e6)));
+        h.setApprover(PASSKEY);
+        vm.expectRevert(abi.encodeWithSelector(WavePolicy.MethodNotAllowed.selector, PASSKEY));
+        h.schedule(0, batch, bytes32(uint256(1)));
+        h.setApprover(WORLD);
+        bytes32 id = h.schedule(0, batch, bytes32(uint256(2)));
+        assertEq(_notBefore(id), block.timestamp + 48 hours);
+        vm.expectRevert(abi.encodeWithSelector(WavePolicy.TooEarly.selector, uint40(block.timestamp + 48 hours)));
+        h.consume(id, batch);
+    }
+
+    function test_daily_aTokenThatIsNotListedCannotHoldALimit() public {
+        address other = address(0x7777);
+        vm.expectRevert(WavePolicy.BadTiers.selector);
+        h.setRules(other, new WaveTier[](0), 5);
+    }
+
+    function test_daily_aSensitiveCallIsNotCounted() public {
+        _limited();
+        h.setApprover(WORLD);
+        h.schedule(0, _approveToken(), bytes32(uint256(1)));
+        (, uint96 spent,,) = h.dailyOf(USDC);
+        assertEq(spent, 0);
+    }
+
+    function test_daily_agentRulesLeaveTheLimitAlone() public {
+        _limited();
+        h.agentSetTiers(USDC, _open());
+        (uint96 limit,,,) = h.dailyOf(USDC);
+        assertEq(limit, 300e6);
+        h.agentTighten(USDC, _open());
+        (limit,,,) = h.dailyOf(USDC);
+        assertEq(limit, 300e6);
+    }
+
+    function testFuzz_daily_totalNeverPassesTheLimit(uint96 limit, uint96[6] calldata amounts) public {
+        limit = uint96(bound(limit, 1, 1_000_000e6));
+        h.setRules(USDC, _open(), limit);
+        h.setApprover(WORLD);
+        uint256 total;
+        for (uint256 i; i < amounts.length; i++) {
+            uint256 amount = amounts[i] % (uint256(limit) + 1);
+            if (total + amount > limit) {
+                _refused(USDC, amount, limit - total);
+                _spend(amount);
+            } else {
+                _spend(amount);
+                total += amount;
+            }
+        }
+        assertLe(total, limit);
     }
 }
