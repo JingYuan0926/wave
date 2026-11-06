@@ -3,6 +3,7 @@ pragma solidity ^0.8.28;
 
 import {IFrameValidator} from "./interfaces/IFrameValidator.sol";
 import {IWaveMethod} from "./interfaces/IWaveMethod.sol";
+import {LibCloneConfig} from "./lib/LibCloneConfig.sol";
 import {LibERC8286} from "./lib/LibERC8286.sol";
 import {LibWitness} from "./lib/LibWitness.sol";
 import {WebAuthn} from "solady/src/utils/WebAuthn.sol";
@@ -10,6 +11,8 @@ import {WebAuthn} from "solady/src/utils/WebAuthn.sol";
 /// @notice Approves a frame transaction with a WebAuthn P-256 assertion over sig_hash.
 /// Runs by DELEGATECALL inside a VERIFY frame. Deploy one instance per method slot, 1 to 3:
 /// `nonce_keys[0]` names the instance, and each instance keeps its own storage namespace.
+/// A clone can name an instance as its owner method. The clone config then holds the first key,
+/// so that wallet has no key in storage until a recovery writes a new one.
 contract PasskeyFrameValidator is IFrameValidator, IWaveMethod {
     struct Key {
         bytes32 x;
@@ -29,6 +32,8 @@ contract PasskeyFrameValidator is IFrameValidator, IWaveMethod {
     bytes32 private immutable SLOT;
     /// Slot N has bit N in the tier method mask.
     uint8 private immutable METHOD_BIT;
+    /// In a DELEGATECALL `address(this)` is the account, so the instance keeps its own address.
+    address private immutable SELF = address(this);
 
     constructor(uint8 methodSlot) {
         require(methodSlot >= 1 && methodSlot <= 6, "bad slot");
@@ -71,6 +76,16 @@ contract PasskeyFrameValidator is IFrameValidator, IWaveMethod {
         return METHOD_BIT;
     }
 
+    /// @dev Storage first, then the clone config of an owner passkey. A recovery writes storage.
+    function _readKey() private view returns (bytes32 x, bytes32 y, bool be, bool uv) {
+        Key storage k = _key();
+        (x, y, be, uv) = (k.x, k.y, k.backupEligible, k.requireUV);
+        if (x != 0 || y != 0) return (x, y, be, uv);
+        bytes memory a = LibCloneConfig.args();
+        if (LibCloneConfig.validator(a) != SELF) return (0, 0, false, false);
+        return LibCloneConfig.ownerKey(a);
+    }
+
     function validateFrame(bytes calldata data) external view returns (uint8) {
         if (!LibERC8286.isTargetedFrame()) return LibERC8286.APPROVE_NONE;
 
@@ -87,8 +102,7 @@ contract PasskeyFrameValidator is IFrameValidator, IWaveMethod {
         WebAuthn.WebAuthnAuth memory auth = WebAuthn.tryDecodeAuthCompact(compact);
         if (auth.authenticatorData.length < 37) return LibERC8286.APPROVE_NONE;
 
-        Key storage k = _key();
-        (bytes32 x, bytes32 y, bool wantBE, bool wantUV) = (k.x, k.y, k.backupEligible, k.requireUV);
+        (bytes32 x, bytes32 y, bool wantBE, bool wantUV) = _readKey();
         if (x == 0 && y == 0) return LibERC8286.APPROVE_NONE;
 
         // Solady checks UP and UV. It does not read BE or BS, so this code does.

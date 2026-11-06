@@ -37,6 +37,7 @@ contract WorldIDFrameValidator is IFrameValidator, IWaveMethod {
         return false;
     }
 
+    /// @dev The owner bit. World ID can only be the owner method, so `_enroll` refuses this bit.
     function methodBit() external pure override returns (uint8) {
         return 1;
     }
