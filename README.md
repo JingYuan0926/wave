@@ -1083,13 +1083,16 @@ lib/                              frame builder, chain client, World ID, policy 
 lib/server/                       route logic: wallet plan, prepare, send, roots, activity,
                                   World ID config, gas sponsor, agent wallets, Agent Pass
 app/                              web app and API route handlers. Pages: /, /settings, /agents
+mcp/wave-server.ts                local stdio MCP server for Claude Code. It holds no secret.
 components/                       web app components
 scripts/
   e2e.ts                          15 cases on the local stack: real frames, real Groth16
   api-smoke.ts                    runs the API routes the same way the browser does
+  mcp-smoke.ts                    runs the MCP tools, /agents and Limits with a fake issuer, not World
   unit.ts                         checks that need no chain
   fetch-zk.sh                     downloads the circuit files for the test identity
-.wave/                            gitignored. The server keeps agent checkpoint data here.
+.wave/                            gitignored. The server keeps agent checkpoint data, the agent
+                                  for the MCP tools and each clientRef here.
 ```
 
 The server publishes roots with a plain transaction, so `RootPublisher.sol` does not exist.
@@ -1156,6 +1159,52 @@ To use Agent Pass:
 The server keeps each attempt in memory. So the tunnel must reach the same server process that
 started the attempt. A quick tunnel gets a new link at each start, so repeat steps 3 and 4 then.
 
+### Use WAVE from Claude Code
+
+A local MCP server gives Claude Code four tools. MCP (Model Context Protocol) lets an AI application
+call local tools. `.mcp.json` starts `mcp/wave-server.ts` over stdio, so nothing is public. This
+server holds no secret. It calls the WAVE app on localhost, and the agent key stays in the app.
+
+1. Start the app with `npx next dev -p 3000`.
+2. Open `http://localhost:3000/agents` and press **Use with Claude Code** on an agent wallet. The
+   app saves this choice in `.wave/tool-agent-<network>.json`, so a restart keeps it.
+3. Start Claude Code in the repository root and run `/mcp`. Approve the `wave` server.
+4. Ask for a payment, such as "send 1 USDC to 0x..., then 10 to 0x...".
+
+| Tool | What it does |
+| --- | --- |
+| `get_balance` | Shows the balance of the saved agent wallet. |
+| `get_limits` | Shows the amount that the agent sends alone, the most per day and the amount left today. |
+| `send_payment` | Asks for one payment. Above the alone amount, a human must approve. An optional `clientRef` makes a retry safe. |
+| `check_approval` | Reads the state of a paused payment. It never sends or confirms. |
+
+`send_payment` gives one of four results:
+
+- `sent`: the agent paid. The result has the transaction hash and an explorer link.
+- `needs_approval`: the amount is above the alone amount. The result has the exact action,
+  the user code, the link, the expiry and the operation ID. Nothing ran.
+- `refused`: the plain reason, such as above the most per day, paused or revoked. A payment above
+  the most per day gets no approval step, and the reason says how much is left today.
+- `unknown`: WAVE cannot tell if the send ran. It stays blocked and never sends again.
+
+To approve a paused payment:
+
+1. Open the link on your phone, and enter the code in World ID.
+2. Open `/agents` on localhost and press **Confirm**. Use a browser on this computer, because the
+   page needs the Sec-Fetch headers that a browser sends on localhost.
+
+The amount must be above the alone amount. A payment of exactly that amount runs alone.
+
+**What stops a repeat.** The same `clientRef` always means the same payment. A retry returns the
+first result and sends nothing. The app saves each `clientRef` before the send starts, in
+`.wave/agent-send-refs-<network>.json`. A `clientRef` with another recipient, token or amount is
+refused. A refused payment saves no record, because nothing moved.
+
+**What this does not stop.** No MCP tool can approve, but the tools are not the only path if Claude
+Code has a shell. Claude Code in this repository can read `.env.local`, and it can call the local
+routes with copied headers. Do not allow its shell tool during a payment. For a real boundary, run
+the app under another system user, or keep the key outside this computer.
+
 To stop:
 
 1. Press Ctrl-C in the terminal of the web server.
@@ -1185,6 +1234,7 @@ run with the test identity.
 | `AGENT_PASS_REDIRECT_URI` | `http://localhost:3000/api/agent-pass/callback` | The callback URL. The portal needs HTTPS, so use a tunnel. |
 | `AGENT_PASS_ACR` | `https://world.org/oidc/acr/orb,https://world.org/oidc/acr/orb-face` | The accepted `acr` values. |
 | `WAVE_AGENT_DEMO_KEY` | blank | The demo agent key. It signs agent spends on the server. |
+| `WAVE_URL` | `http://localhost:3000` | The app address for `mcp/wave-server.ts`. It must name localhost. Set it in the shell that starts Claude Code, because the MCP server does not read `.env.local`. |
 | `NEXT_PUBLIC_WAVE_MOCK` | not set | `1` selects the mock data layer, for UI work only. It uses no chain and no proofs. |
 
 Keep `RP_SIGNING_KEY`, `AGENT_PASS_CLIENT_SECRET` and `WAVE_AGENT_DEMO_KEY` out of the repo.
