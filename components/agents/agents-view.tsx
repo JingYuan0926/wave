@@ -6,7 +6,7 @@ import { useWallet } from "@/components/wallet-provider";
 import type { Address } from "@/lib/api-types";
 import { AgentCard } from "./agent-card";
 import { CreateAgent } from "./create-agent";
-import { ApprovalResult, HumanApprovals, RecentActions } from "./operations";
+import { HumanApprovals, RecentActions } from "./operations";
 import { useAgents } from "./use-agents";
 
 function Panel({ master }: { master: Address }) {
@@ -44,13 +44,18 @@ function Panel({ master }: { master: Address }) {
       ) : null}
       {!data.agentPassConfigured ? (
         <Notice tone="warning" title="Agent Pass is not configured">
-          Actions above the approval amount stay blocked. There is no other way to approve them.
+          Payments above the alone amount stay blocked. There is no other way to approve them.
         </Notice>
       ) : null}
-      <ApprovalResult />
-      <HumanApprovals operations={data.operations} configured={data.agentPassConfigured} />
+      <HumanApprovals operations={data.operations} configured={data.agentPassConfigured} onChanged={changed} />
       {data.agents.map((agent, index) => (
-        <AgentCard key={agent.address} agent={agent} name={`Agent ${index + 1}`} onChanged={changed} />
+        <AgentCard
+          key={agent.address}
+          agent={agent}
+          name={`Agent ${index + 1}`}
+          usedByTools={agent.address.toLowerCase() === data.toolAgent?.toLowerCase()}
+          onChanged={changed}
+        />
       ))}
       <RecentActions operations={data.operations} />
       <CreateAgent data={data} onChanged={changed} />

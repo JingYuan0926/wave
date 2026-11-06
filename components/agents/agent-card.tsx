@@ -1,6 +1,6 @@
 "use client";
 
-import { Banknote, Bot, Pause, Play, ShieldOff, SlidersHorizontal, Wallet } from "lucide-react";
+import { Banknote, Bot, Droplets, Pause, Play, ShieldOff, SlidersHorizontal, Terminal, Wallet } from "lucide-react";
 import { useState } from "react";
 import { ApproveFlow, anyMethod, requireMethod, type ApprovalRequest } from "@/components/approve-flow";
 import { SendFlow } from "@/components/send-flow";
@@ -9,10 +9,22 @@ import { CardFrame } from "@/components/wallet-card";
 import { useWallet } from "@/components/wallet-provider";
 import { api } from "@/lib/api-client";
 import type { AgentAdminOp, AgentSpendResponse, AgentView, TokenInfo, TxAction } from "@/lib/api-types";
-import { agentTier, limitError } from "@/lib/ui/agents";
-import { formatAmount, parseTokenAmount, plainAmount } from "@/lib/ui/format";
-import { explainRejection } from "@/lib/ui/rejections";
+import {
+  agentTier,
+  aloneStep,
+  aloneUnits,
+  limitDraftOf,
+  limitLines,
+  limitSaveLine,
+  limitShapeNote,
+  limitsValid,
+  tierSaveLine,
+  type LimitDraft,
+} from "@/lib/ui/agents";
+import { parseTokenAmount } from "@/lib/ui/format";
+import { explainAgentRejection } from "@/lib/ui/rejections";
 import { compareRules, changeTiming } from "@/lib/ui/rules";
+import { LimitFields } from "./limit-fields";
 
 type Approve = (op: AgentAdminOp, who: "any" | "owner", note?: string) => void;
 
@@ -52,22 +64,13 @@ function LimitLines({ agent }: { agent: AgentView }) {
     const tier = rules?.tiers[0];
     if (!tier) return [];
     const ask = askAboveOf(agent, token);
+    const [sends, total] = limitLines(tier, ask, token);
+    const note = limitShapeNote(tier, ask, token);
     return [
       <li key={token.address} className="flex flex-col">
-        <span>
-          {plainAmount(tier.upTo, token.decimals)} {token.symbol} per transfer
-          {BigInt(tier.cap) > BigInt(0) ? `, ${plainAmount(tier.cap, token.decimals)} per day` : ", no daily limit"}
-        </span>
-        {BigInt(tier.cap) > BigInt(0) ? (
-          <span className="text-muted-foreground">
-            {formatAmount(tier.spent, token.decimals)} {token.symbol} spent in this period
-          </span>
-        ) : null}
-        <span className="text-muted-foreground">
-          {ask === null
-            ? "Every spend asks you"
-            : `Asks you above ${plainAmount(ask, token.decimals)} ${token.symbol}`}
-        </span>
+        <span>{sends}</span>
+        <span className="text-muted-foreground">{total}</span>
+        {note ? <span className="text-muted-foreground">{note}</span> : null}
       </li>,
     ];
   });
@@ -91,104 +94,68 @@ function LimitsForm({
   const { info, account } = useWallet();
   const chain = agent.rules.find((rule) => rule.token === token.address)?.tiers ?? [];
   const tier = chain[0];
-  const [perTransfer, setPerTransfer] = useState(tier ? plainAmount(tier.upTo, token.decimals) : "");
-  const [perDay, setPerDay] = useState(
-    tier && BigInt(tier.cap) > BigInt(0) ? plainAmount(tier.cap, token.decimals) : "",
-  );
-  const current = askAboveOf(agent, token);
-  const [askAbove, setAskAbove] = useState(current === null ? "" : plainAmount(current, token.decimals));
+  const stored = askAboveOf(agent, token);
+  const [draft, setDraft] = useState(() => limitDraftOf(tier, stored, token));
   const [saved, setSaved] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const draft = { perTransfer, perDay };
-  const problem = limitError(draft, token);
-  const tiers = problem ? null : [agentTier(draft, token)];
+  const valid = limitsValid(draft, token);
+  const tiers = valid ? [agentTier(draft, token)] : null;
   const change = tiers && account ? compareRules(chain, tiers, token, account.methods, info?.world) : null;
-  const ask = askAbove ? parseTokenAmount(askAbove, token.decimals) : null;
+  const direction = change?.direction ?? "same";
+  const step = valid ? aloneStep(stored, aloneUnits(draft, token)) : "none";
+  const timing = changeTiming(account?.waitSeconds ?? null, 172800);
+  const line = limitSaveLine(step, direction, timing);
+  const note = tier ? limitShapeNote(tier, stored, token) : null;
 
-  const saveLimits = () => {
-    if (!tiers || !change) return;
-    if (change.direction === "stricter") {
-      approve({ kind: "tighten", token: token.address, tiers }, "any");
-    } else {
-      approve(
-        { kind: "set-tiers", token: token.address, tiers },
-        "owner",
-        `Looser limits need the owner method. ${changeTiming(account?.waitSeconds ?? null, 172800)}`,
-      );
-    }
+  const edit = (next: LimitDraft) => {
+    setDraft(next);
+    setSaved(null);
+    setError(null);
   };
 
-  const saveAsk = async () => {
-    if (ask?.value === undefined || ask.value === null) return;
+  /** The alone amount goes first. So no higher onchain limit can run with an old, higher alone amount. */
+  const saveAlone = async (): Promise<string | null> => {
+    if (step === "none") return null;
+    const result = await api.agentCheckpoint({
+      agent: agent.address,
+      token: token.address,
+      askAbove: aloneUnits(draft, token).toString(),
+    });
+    onChanged();
+    return result.result === "applied"
+      ? "The alone amount is saved."
+      : "The higher alone amount waits in Needs human approval.";
+  };
+
+  const save = async () => {
+    if (!tiers) return;
     setBusy(true);
     setSaved(null);
     setError(null);
+    let aloneResult: string | null;
     try {
-      const result = await api.agentCheckpoint({
-        agent: agent.address,
-        token: token.address,
-        askAbove: ask.value.toString(),
-      });
-      setSaved(
-        result.result === "applied"
-          ? "Saved."
-          : "A higher amount needs your approval. It waits in Needs human approval.",
-      );
-      onChanged();
+      aloneResult = await saveAlone();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "WAVE could not save this amount.");
+      return;
     } finally {
       setBusy(false);
     }
+    const approveNote = [aloneResult, tierSaveLine(direction, timing)].filter((part) => part !== null).join(" ");
+    if (direction === "stricter") approve({ kind: "tighten", token: token.address, tiers }, "any", approveNote);
+    else if (direction === "looser") approve({ kind: "set-tiers", token: token.address, tiers }, "owner", approveNote);
+    else setSaved(aloneResult);
   };
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="grid grid-cols-2 gap-2">
-        <Field
-          label="Per transfer"
-          name="limit-per-transfer"
-          value={perTransfer}
-          onChange={(event) => setPerTransfer(event.target.value)}
-          autoComplete="off"
-          inputMode="decimal"
-        />
-        <Field
-          label="Per day"
-          name="limit-per-day"
-          value={perDay}
-          onChange={(event) => setPerDay(event.target.value)}
-          placeholder="No limit"
-          autoComplete="off"
-          inputMode="decimal"
-        />
-      </div>
-      {perTransfer && problem ? <p className="text-sm text-destructive">{problem}</p> : null}
-      {change && change.direction !== "same" ? (
-        <Notice
-          tone={change.direction === "looser" ? "warning" : "info"}
-          title={change.direction === "looser" ? "Looser: this needs the owner method" : "Stricter: applies at once"}
-        >
-          {change.changes.join(" ")}
-        </Notice>
-      ) : null}
-      <Button variant="secondary" onClick={saveLimits} disabled={!change || change.direction === "same"}>
-        Save limits
-      </Button>
-      <Field
-        label="Ask a human above"
-        name="limit-ask-above"
-        value={askAbove}
-        onChange={(event) => setAskAbove(event.target.value)}
-        autoComplete="off"
-        inputMode="decimal"
-        error={ask?.error ?? null}
-        hint="The server enforces this amount, not the chain. A higher amount needs your approval."
-      />
-      <Button variant="secondary" onClick={() => void saveAsk()} disabled={busy || ask === null || ask.value === null}>
-        {busy ? "Saving…" : "Save amount"}
+      {note ? <p className="text-sm text-muted-foreground">{note}</p> : null}
+      <LimitFields draft={draft} token={token} onChange={edit} />
+      {line ? <p className="text-sm text-muted-foreground">{line}</p> : null}
+      <Button onClick={() => void save()} disabled={busy || !valid || line === null || saved !== null}>
+        {busy ? "Saving…" : "Save"}
       </Button>
       {saved ? <Notice>{saved}</Notice> : null}
       {error ? <Notice tone="danger" title="This was not saved">{error}</Notice> : null}
@@ -279,19 +246,12 @@ function SpendResult({ result }: { result: AgentSpendResponse }) {
   if (result.result === "needs-approval") {
     return (
       <Notice tone="warning" title="Needs human approval">
-        This is above the amount that the agent can spend alone. Nothing ran. Close this sheet and approve it.
+        This is above the amount that the agent sends alone. Nothing ran. Close this sheet and approve it with World ID.
       </Notice>
     );
   }
   if (result.result === "rejected") {
-    // The general text sends the owner to Settings. The limits of an agent are on this card.
-    const text =
-      result.rejection.code === "NoTier"
-        ? {
-            title: "This is above the agent's limits",
-            detail: "The contract refused it. The amount is above the per transfer limit, or the daily limit is full.",
-          }
-        : explainRejection(result.rejection);
+    const text = explainAgentRejection(result.rejection);
     return (
       <Notice tone="danger" title={text.title}>
         {text.detail}
@@ -348,7 +308,7 @@ function SpendSheet({ agent, onChanged, onClose }: { agent: AgentView; onChanged
     <Sheet title="Run the demo agent" onClose={onClose}>
       <form className="flex flex-col gap-3" onSubmit={(event) => event.preventDefault()}>
         <p className="text-sm text-muted-foreground">
-          The server signs as the agent with the demo key. Your limits and the human checkpoint apply.
+          The server signs as the agent with the demo key. Above the alone amount, you approve with World ID.
         </p>
         <Field
           label="To"
@@ -381,23 +341,85 @@ function SpendSheet({ agent, onChanged, onClose }: { agent: AgentView; onChanged
   );
 }
 
+/** Saves this agent wallet for the local MCP tools. A tool cannot choose which wallet pays. */
+function UseWithClaude({
+  agent,
+  used,
+  disabled,
+  onChanged,
+}: {
+  agent: AgentView;
+  used: boolean;
+  disabled: boolean;
+  onChanged: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const save = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.agentUseWithClaude(agent.address);
+      onChanged();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "WAVE could not save this agent.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-2">
+      {used ? (
+        <Notice tone="success" title="Claude Code uses this agent">
+          Run /mcp in Claude Code, then ask for a payment. Above the alone amount, you approve with World ID.
+        </Notice>
+      ) : (
+        <Button variant="secondary" onClick={() => void save()} disabled={busy || disabled}>
+          <Terminal aria-hidden="true" className="size-4" />
+          {busy ? "Saving…" : "Use with Claude Code"}
+        </Button>
+      )}
+      {error ? <Notice tone="danger" title="This was not saved">{error}</Notice> : null}
+    </div>
+  );
+}
+
 type Panel = "fund" | "limits" | "withdraw" | "spend";
 
 export function AgentCard({
   agent,
   name,
+  usedByTools,
   onChanged,
 }: {
   agent: AgentView;
   name: string;
+  usedByTools: boolean;
   onChanged: () => void;
 }) {
   const { account, info, tokenBy, offline } = useWallet();
   const [panel, setPanel] = useState<Panel | null>(null);
   const [request, setRequest] = useState<ApprovalRequest | null>(null);
   const [sheetKey, setSheetKey] = useState(0);
+  const [funding, setFunding] = useState(false);
+  const [faucetError, setFaucetError] = useState<string | null>(null);
 
   if (!account) return null;
+
+  const faucet = async () => {
+    setFunding(true);
+    setFaucetError(null);
+    try {
+      await api.faucet(agent.address);
+      onChanged();
+    } catch (cause) {
+      setFaucetError(cause instanceof Error ? cause.message : "The faucet failed.");
+    } finally {
+      setFunding(false);
+    }
+  };
 
   const approve: Approve = (op, who, note) => {
     const action: TxAction = { kind: "agent", agent: agent.address, op };
@@ -428,6 +450,8 @@ export function AgentCard({
           {agent.balances.map((balance) => {
             const token = tokenBy(balance.token);
             if (!token) return null;
+            // A sponsored wallet pays no gas, so ETH does not matter there.
+            if (info?.gasSponsored && token.symbol === "ETH") return null;
             return (
               <div key={balance.token} className="flex items-baseline justify-between gap-3">
                 <dt className="text-sm text-white/70">{token.isTest ? token.name : token.symbol}</dt>
@@ -451,8 +475,18 @@ export function AgentCard({
             <Wallet aria-hidden="true" className="size-4" />
             Fund
           </Button>
+          <Button
+            variant="onCardGhost"
+            className="col-span-2"
+            onClick={faucet}
+            disabled={offline || funding}
+          >
+            <Droplets aria-hidden="true" className="size-4" />
+            {funding ? "Getting test USDC…" : "Get test USDC"}
+          </Button>
         </div>
       </CardFrame>
+      {faucetError ? <Notice tone="danger" title="The faucet failed">{faucetError}</Notice> : null}
 
       <Card className="flex flex-col gap-3">
         <div className="flex items-center justify-between gap-2">
@@ -508,6 +542,12 @@ export function AgentCard({
             </Button>
           )}
         </div>
+        <UseWithClaude
+          agent={agent}
+          used={usedByTools}
+          disabled={offline || revoked || agent.paused || !agent.serverHoldsKey}
+          onChanged={onChanged}
+        />
       </Card>
 
       {panel === "fund" ? (
