@@ -778,12 +778,33 @@ We also select the EF CROPS track. EF places each project in at most one EF priz
 - This replaces the earlier AgentKit plan. WAVE has no AgentKit code, no AgentBook and no contract
   for this feature.
 
-### 3. Whitechain: Scale · Payments Nobody Notices (planned, after the core)
+### 3. Whitechain: Scale · Payments Nobody Notices (built, not yet deployed)
 
-**Status: planned.** We build this only after the core works.
+**Status: the transfer version is built and passes its tests on a local node. It is not deployed
+to Whitechain Sepolia yet.** See [WAVE on Whitechain Sepolia](#wave-on-whitechain-sepolia) to
+deploy it.
 
-A merchant version of the wallet: the payer pays in USDT with Face ID. The payer holds no seed
-phrase and no gas, and does not need to know the chain.
+**Built so far:** passkey-only payments from the WAVE Chrome extension, with the same spending
+rules and delay queue as the frame account. The payer holds no seed phrase and no WBT.
+
+- `contracts/whitechain/src/`:
+  - `WaveAccount4337.sol`: an EntryPoint v0.7 account that inherits the unchanged `WavePolicy.sol`.
+  - `WavePasskeyValidator.sol`: the BE/BS rules of `PasskeyFrameValidator`, over the userOpHash.
+  - `WaveAccount4337Factory.sol`: CREATE2 clones whose address commits to the key and the rules.
+  - `WavePaymaster.sol`: the v0.7 verifying paymaster.
+  - `WaveTestToken.sol`: tUSDT, an open-mint test token.
+- The owner passkey takes the World ID role in `WavePolicy`, because Whitechain has no World ID.
+  Looser rules need the passkey and 48 hours.
+- **Relayer:** `app/api/wc/{sponsor,send,faucet}`. Whitechain documents no bundler, so this server
+  is the bundler. It signs for the paymaster, calls `handleOps`, and mints tUSDT once a day per
+  wallet.
+- **Extension:** `extension/` reads balances, tiers, caps and the queue from the chain. Each
+  operation is signed with a WebAuthn passkey.
+- **Not built yet:** the checkout widget and the demo shop below. They come after the first real
+  payment.
+
+The design we planned: a merchant version of the wallet. The payer pays in USDT with Face ID. The
+payer holds no seed phrase and no gas, and does not need to know the chain.
 
 - **The catch:** Whitechain (OP Stack, Whitechain Sepolia chain ID 1874) has no EIP-8141, and
   World's verifier contracts are not on it. So this version is an **ERC-4337** smart account with a
@@ -842,7 +863,20 @@ virtual authenticator** sign with real P-256 math, but no device, face or finger
       authenticator, with a demo delay. A forge test checks the distinct-method rule and 7 days.*
 - [ ] Fallback root source change with two distinct other methods. *A forge test checks who can
       propose it. No test runs the full change.*
-- [ ] Whitechain merchant version
+- [x] Whitechain: ERC-4337 passkey account with the same `WavePolicy` rules. *15 Solidity tests
+      with real P-256 WebAuthn signatures: first send deploys the wallet, wrong key, BE/UV checks,
+      unsponsored op, caps move to the next tier, over 1,000 must be scheduled, run after the
+      delay, cancel. Local EntryPoint v0.7 only.*
+- [x] Whitechain: relayer, paymaster and faucet end to end. *`scripts/e2e-whitechain.ts` on a
+      local Hardhat node with chain ID 1874 and EntryPoint v0.7 at its canonical address: faucet,
+      a first payment that deploys the wallet, a second payment, two scheduled transfers, one
+      cancel, and one run after the delay. Software P-256 key, not a device passkey.*
+- [ ] Whitechain: contracts deployed and verified on the Whitechain Sepolia explorer. *Not run.
+      Needs a deployer key with Sepolia WBT.*
+- [ ] Whitechain: at least one payment in Whitechain test USDT, with the explorer link here.
+      *Not run. Only the owner can mint that token. tUSDT works without it.*
+- [ ] Whitechain: a payment from the extension with a passkey on a real device. *Not run.*
+- [ ] Whitechain merchant checkout widget and demo shop. *Not built.*
 - [x] Local gas sponsor: a wallet with 0 ETH sends transactions, and the gas station pays only with
       the sponsor signature. *Test identity and software authenticator. Local network only. The
       fee cap and the shape check ran in unit tests only.*
@@ -873,10 +907,21 @@ contracts/                        own package.json. Hardhat with the solc fork, 
     TestUSDC.sol                  local test token, open mint
   scripts/deploy.ts               deploys all contracts, writes deployments/local.json
   test/WavePolicy.t.sol           forge tests for the policy
+  whitechain/src/                 Whitechain (no EIP-8141): ERC-4337 account, passkey validator,
+                                  factory, paymaster, tUSDT. Stock solc 0.8.30, evm "prague"
+  whitechain/test/                Hardhat Solidity tests with real P-256 WebAuthn signatures
+  hardhat.whitechain.config.ts    the Whitechain build. hardhat.config.ts stays the 8141 build
+  scripts/deploy-whitechain.ts    deploys to Whitechain Sepolia, writes deployments/whitechain-sepolia.json
+  scripts/verify-whitechain.ts    verifies those contracts on the Whitechain Blockscout explorer
+  scripts/local-whitechain.ts     prepares a local node (chain ID 1874) for a dry run
+  scripts/e2e-whitechain.ts       the extension's steps with a software passkey
+extension/                        the WAVE Chrome extension (side panel). Vite and React.
+                                  On Whitechain Sepolia, data comes from the chain.
 devnet/                           the local stack: ethrex, Lighthouse, sidecar, explorer
 lib/                              frame builder, chain client, World ID, policy encoding
 lib/server/                       route logic: prepare, send, roots, activity, World ID config,
                                   gas sponsor, agent wallets, Agent Pass
+  wc-relayer.ts                   Whitechain relayer: sponsor checks, paymaster signature, handleOps, faucet
 app/                              web app and API route handlers. Pages: /, /settings, /agents
 components/                       web app components
 scripts/
@@ -959,6 +1004,39 @@ To stop:
 
 After the Mac sleeps, run `devnet/up.sh`. It keeps the chain.
 
+### WAVE on Whitechain Sepolia
+
+This needs no Docker and no solc fork, and it works on Windows: Hardhat 3 builds and tests it.
+
+1. In `contracts/`, run `npm install`, then `npm run build:wc` and `npm run test:wc`.
+2. Make two keys that hold no real value: a deployer and a relayer. Put them in the root
+   `.env.local` as `WC_DEPLOYER_KEY` and `WC_RELAYER_KEY`. Never paste them into a chat or commit
+   them.
+3. Get Sepolia WBT for both addresses at https://faucet.testnet.whitechain.io. The faucet gives
+   0.5 WBT a day. The deployer needs about 0.25 WBT, because 0.2 goes to the paymaster deposit.
+   The relayer pays `handleOps` and the faucet mints.
+4. In `contracts/`, run `npm run deploy:wc`, then `npm run verify:wc`. This writes
+   `contracts/deployments/whitechain-sepolia.json`.
+5. Start the relayer: `npx next dev -p 3000` in the repo root.
+6. Build the extension: `npm install` and `npm run build` in `extension/`. Then load
+   `extension/dist` as an unpacked extension at `chrome://extensions`. For a web preview, run
+   `npm run dev` in `extension/` and open `http://localhost:5173`. Set `VITE_WC_RELAYER_URL` if
+   the relayer is not at `http://localhost:3000`.
+7. Create the wallet with a passkey. Then use **Add money** and **Get 500 test tUSDT**, and send
+   a payment.
+
+To try it all without Sepolia, run a local node:
+
+```sh
+npx hardhat node --config hardhat.whitechain.config.ts --chain-id 1874 --port 8599
+WC_RPC_URL=http://127.0.0.1:8599 npx tsx scripts/local-whitechain.ts
+WC_RPC_URL=http://127.0.0.1:8599 WC_DEPLOYER_KEY=<hardhat account 0> WC_RELAYER_KEY=<hardhat account 1> npm run deploy:wc
+WC_RELAYER_URL=http://localhost:3000 WC_RPC_URL=http://127.0.0.1:8599 WC_E2E_MINT_KEY=<hardhat account 0> npx tsx scripts/e2e-whitechain.ts
+```
+
+The relayer needs the same `WC_RPC_URL`. **Delete `contracts/deployments/whitechain-sepolia.json`
+after a local run.** It points at your local node.
+
 ### Environment variables
 
 Put these in `.env.local`. `.env.example` has every value. All values are optional for a local
@@ -981,8 +1059,16 @@ run with the test identity.
 | `AGENT_PASS_ACR` | `https://world.org/oidc/acr/orb,https://world.org/oidc/acr/orb-face` | The accepted `acr` values. |
 | `WAVE_AGENT_DEMO_KEY` | blank | The demo agent key. It signs agent spends on the server. |
 | `NEXT_PUBLIC_WAVE_MOCK` | not set | `1` selects the mock data layer, for UI work only. It uses no chain and no proofs. |
+| `WC_DEPLOYER_KEY` | blank | Whitechain: the key that runs `npm run deploy:wc`. It needs Sepolia WBT. |
+| `WC_RELAYER_KEY` | blank | Whitechain: the relayer key. The paymaster trusts its signature, and it pays `handleOps`. |
+| `WC_RPC_URL` | `https://rpc.testnet.whitechain.io` | Whitechain RPC for the deploy scripts and the relayer. |
+| `WC_SPONSOR_DAILY_TX` | `30` | Whitechain: sponsored operations per wallet per day. |
+| `WC_PAYMASTER_DEPOSIT` | `0.2` | Whitechain: WBT that the deploy puts in the paymaster. |
+| `WC_DEMO_DELAY` | `0` | Whitechain: the delay cap in seconds for every wallet of the deployment. `0` means real delays. |
+| `VITE_WC_RELAYER_URL` | `http://localhost:3000` | Extension build: where the relayer runs. |
 
-Keep `RP_SIGNING_KEY`, `AGENT_PASS_CLIENT_SECRET` and `WAVE_AGENT_DEMO_KEY` out of the repo.
+Keep `RP_SIGNING_KEY`, `AGENT_PASS_CLIENT_SECRET`, `WAVE_AGENT_DEMO_KEY`, `WC_DEPLOYER_KEY` and
+`WC_RELAYER_KEY` out of the repo.
 
 ### The local devnet
 
