@@ -593,18 +593,29 @@ error. If Agent Pass is not configured, the action stays blocked. There is no by
 The Settings card "Agent approval (World ID Agent Pass)" is a separate test panel. It guards a mint
 of 1 test USDC, not an agent spend.
 
-### Why this may need the alternative mempool
+### Why this needs the alternative mempool
 
-The EF track names two cases that only the alternative mempool allows. We expect case (a):
+The EF track names two cases that only the alternative mempool allows. We use case (a):
 
-- **(a) Verification above 100k gas.** The public mempool caps validation gas. We expect our
-  World ID check to cost more. The alternative mempool gives staked accounts a larger budget.
+- **(a) Verification above 100k gas.** The public mempool caps validation gas at 100k. We
+  measured the World ID `VERIFY` frame on the local stack. It uses about 236.8k gas, or 253.8k in
+  a first transaction.
 - **(b) Flexible state access.** We avoid this case on purpose. EIP-8272 brings the root in
   without an external storage read.
 
-**This is provisional.** We will confirm it only after we measure the full validation prefix and
-get an admitted transaction. For comparison, the playground's SPHINCS validator uses about
-389k–416k gas in its `VERIFY` frame.
+| `VERIFY` frame | Gas used, measured by `scripts/e2e.ts` |
+|---|---|
+| World ID | 236,599 to 236,804 |
+| World ID, first transaction (deploy and first use of the nonce key) | 253,803 |
+| Passkey | 30,195 to 30,417 |
+| Passkey, first use of the nonce key | 50,195 to 50,417 |
+
+**The stock sidecar does not admit this.** It has one flat limit of 100k. A staked sender gets no
+larger budget: a test with a staked sender got the same error. The stock sidecar also rejects a
+call to a precompile, because its precompile list is empty. So we run a local sidecar with two
+changes. See [the local devnet](#the-local-devnet).
+
+For comparison, the playground's SPHINCS validator uses about 389k–416k gas in its `VERIFY` frame.
 
 ## Why World ID, and why this credential
 
@@ -621,14 +632,14 @@ must know that **this specific human** approved **this exact transaction**.
 
 **Alternative paths we demo:**
 
-| Path | What happens |
-|---|---|
-| The owner cancels in World App | No proof. The app sends nothing. |
-| A different human proves | The nullifier does not match. `validateFrame` returns `APPROVE_NONE`. The transaction is invalid. |
-| The root reference is too old | The EIP-8272 frame fails. The mempool evicts the transaction. |
-| A stolen passkey tries to install a module | Rejected at once. The rules need World ID for module changes. |
-| Face ID tries a 150 USDC transfer | Rejected. The owner's rule needs World ID for 100 USDC or more. |
-| A World ID-approved sensitive change | It waits in the delay queue. Another enrolled method cancels it. |
+| Path | What happens | Tested |
+|---|---|---|
+| The owner cancels in World App | No proof. The app sends nothing. | No. This needs a real scan. |
+| A different human proves | The nullifier does not match. `validateFrame` returns `APPROVE_NONE`. The transaction is invalid. | Yes, with test identities. |
+| The root reference is too old | The chain rejects the reference. The transaction is invalid. | Age not tested. An uncommitted root and a wrong source are rejected. |
+| A stolen passkey tries to install a module | Rejected at once with `SenderFrameNotAllowed`. The rules need World ID for module changes. | Yes, with a virtual authenticator. |
+| Face ID tries a 150 USDC transfer | Rejected with `MethodNotAllowed`. The owner's rule needs World ID for 100 USDC or more. | Yes, with a virtual authenticator. |
+| A World ID-approved sensitive change | It waits in the delay queue. Another enrolled method cancels it. | Yes, with a test identity and a virtual authenticator. |
 
 ## Security model
 
