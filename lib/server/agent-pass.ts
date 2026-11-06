@@ -1,20 +1,23 @@
 // World ID Agent Pass: an OIDC step-up that guards one protected action. Server side only.
-// The server keeps each attempt by `state`, because the flow starts on localhost and returns on
-// the tunnel host, so a browser cookie cannot bind them.
+// Two flows use it:
+// - The browser flow (the Settings test panel). The server keeps each attempt by `state`, because
+//   the flow starts on localhost and returns on the tunnel host, so a cookie cannot bind them.
+// - The device flow (agent actions). It needs no callback and no tunnel. The server polls World
+//   for the result. World shows no action, so this flow proves only who the person is.
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { createRemoteJWKSet, errors, jwtVerify, type JWTPayload } from 'jose'
-import { after } from 'next/server'
 import { encodeFunctionData, type Address, type Hex } from 'viem'
 import {
   AGENT_PASS_OPERATION,
   type AgentPassAttempt,
+  type AgentPassDevice,
   type AgentPassReason,
   type AgentPassStartResponse,
   type AgentPassStatusResponse,
 } from '../api-types'
-import { LEGACY_TX, devWallet, explorerLink, publicClient } from '../chain'
+import { LEGACY_TX, devWallet, explorerLink, publicClient, sleep } from '../chain'
 import { TestUSDCAbi } from '../wave-abi'
-import { identityOf, linkIdentity } from './agent-store'
+import { identityOf, linkIdentity, type Identity } from './agent-store'
 import { ApiFailure, deployment } from './http'
 import { withDevKey } from './roots'
 
@@ -25,8 +28,6 @@ const DEFAULT_ACR = 'https://world.org/oidc/acr/orb,https://world.org/oidc/acr/o
 
 /** The browser returns here. The owner uses the app on this host, not on the tunnel host. */
 const RETURN_URL = 'http://localhost:3000/settings'
-/** The return page for an agent action, and for a callback that matches no attempt. */
-const AGENTS_URL = 'http://localhost:3000/agents'
 
 const ATTEMPT_MS = 60_000
 const CLOCK_SKEW_SECONDS = 30
@@ -42,6 +43,13 @@ const MAX_ATTEMPTS = 500
 const DEMO_AMOUNT = 1_000_000n
 const MINT_GAS = 500_000n
 
+const DEVICE_GRANT = 'urn:ietf:params:oauth:grant-type:device_code'
+/** RFC 8628 section 3.2: the default wait when the response gives no interval. */
+const DEFAULT_POLL_SECONDS = 5
+const SLOW_DOWN_MS = 5_000
+/** The longest extra wait after a poll that timed out. */
+const MAX_BACKOFF_MS = 30_000
+
 type Config = {
   issuer: string
   clientId: string
@@ -55,6 +63,7 @@ type Discovery = {
   authorization_endpoint: string
   token_endpoint: string
   jwks_uri: string
+  device_authorization_endpoint?: string
   authorization_response_iss_parameter_supported?: boolean
 }
 
@@ -64,13 +73,13 @@ type Stage = 'pending' | 'checking' | 'running' | 'approved' | 'failed'
 export type GuardedAction = {
   /** Unix milliseconds. It does not move when a person tries again. */
   expiresAt: number
-  /** Uses the one-use approval. This must not await. False if the action cannot run now. */
-  consume: () => boolean
-  /** Runs after consume. It records its own failure and gives the transaction hash, if any. */
-  run: () => Promise<Hex | null>
+  /**
+   * The person passed every check. This does not run the action: WAVE must show it first.
+   * This must not await. False if the action is closed.
+   */
+  authenticated: (identity: Identity) => boolean
   /** One attempt failed. The action stays unsent. */
   refused: (reason: AgentPassReason, detail: string) => void
-  returnUrl: string
 }
 
 type Attempt = {
@@ -93,6 +102,8 @@ type Attempt = {
   identity: 'linked' | 'matched' | null
   /** Null for the test panel: its action is a mint, and the wallet has no agent. */
   guarded: GuardedAction | null
+  /** Null for the browser flow. The device code is not here: only the poll loop holds it. */
+  handoff: Omit<AgentPassDevice, 'expiresAt'> | null
 }
 
 type Store = {
@@ -203,7 +214,7 @@ function end(attempt: Attempt, reason: AgentPassReason, detail: string) {
 
 function expireIfDue(attempt: Attempt) {
   if (attempt.stage === 'pending' && Date.now() > attempt.expiresAt) {
-    end(attempt, 'expired', 'The 1-minute window ended before World ID returned.')
+    end(attempt, 'expired', 'The approval window ended before World ID returned.')
   }
 }
 
@@ -228,7 +239,8 @@ function refusedCallback(reason: AgentPassReason, detail: string, first?: Attemp
     acr: null,
     amr: null,
     identity: null,
-    guarded: first?.guarded ?? null,
+    guarded: null,
+    handoff: null,
   }
   store.byId.set(record.id, record)
   return record.id
@@ -266,15 +278,22 @@ export function readStatus(id: string | null): AgentPassStatusResponse {
   }
 }
 
-export async function startAttempt(wallet: Address, guarded?: GuardedAction): Promise<AgentPassStartResponse> {
+/** The configuration and the discovery document, or a failure that a route can show. */
+async function readProvider(): Promise<{ config: Config; doc: Discovery }> {
   const config = readConfig()
   if (!config) throw new ApiFailure('AGENT_PASS_NOT_CONFIGURED', 'Agent Pass is not configured.', 503)
-  let doc: Discovery
   try {
-    doc = await discover(config.issuer)
+    return { config, doc: await discover(config.issuer) }
   } catch (error) {
     throw new ApiFailure('AGENT_PASS_UNAVAILABLE', (error as Error).message, 502)
   }
+}
+
+/** An essential request: a token with another class must not arrive at all. */
+const acrClaims = (config: Config) => JSON.stringify({ id_token: { acr: { essential: true, values: config.acr } } })
+
+export async function startAttempt(wallet: Address): Promise<AgentPassStartResponse> {
+  const { config, doc } = await readProvider()
 
   prune()
   const now = Date.now()
@@ -285,9 +304,9 @@ export async function startAttempt(wallet: Address, guarded?: GuardedAction): Pr
     codeVerifier: randomBytes(32).toString('base64url'),
     approvalId: randomUUID(),
     wallet,
-    token: guarded ? null : deployment().testUsdc,
+    token: deployment().testUsdc,
     createdAt: now,
-    expiresAt: guarded?.expiresAt ?? now + ATTEMPT_MS,
+    expiresAt: now + ATTEMPT_MS,
     stage: 'pending',
     reason: null,
     detail: null,
@@ -295,7 +314,8 @@ export async function startAttempt(wallet: Address, guarded?: GuardedAction): Pr
     acr: null,
     amr: null,
     identity: null,
-    guarded: guarded ?? null,
+    guarded: null,
+    handoff: null,
   }
   store.byState.set(attempt.state, attempt)
   store.byId.set(attempt.id, attempt)
@@ -313,7 +333,7 @@ export async function startAttempt(wallet: Address, guarded?: GuardedAction): Pr
     code_challenge_method: 'S256',
     // max_age=0 asks for a new authentication, even with a live World session.
     max_age: '0',
-    claims: JSON.stringify({ id_token: { acr: { essential: true, values: config.acr } } }),
+    claims: acrClaims(config),
   }).toString()
   return { attemptId: attempt.id, authorizeUrl: url.toString(), expiresAt: attempt.expiresAt }
 }
@@ -335,8 +355,10 @@ function refusalForError(code: string): Refusal {
 /** RFC 6749 section 2.3.1: form-encode each part before HTTP Basic. */
 const formEncode = (value: string) => encodeURIComponent(value).replace(/%20/g, '+')
 
+const basicAuth = (config: Config) =>
+  `Basic ${Buffer.from(`${formEncode(config.clientId)}:${formEncode(config.clientSecret)}`).toString('base64')}`
+
 async function redeemCode(config: Config, doc: Discovery, attempt: Attempt, code: string): Promise<string> {
-  const basic = Buffer.from(`${formEncode(config.clientId)}:${formEncode(config.clientSecret)}`).toString('base64')
   let response: Response
   try {
     response = await fetch(doc.token_endpoint, {
@@ -344,7 +366,7 @@ async function redeemCode(config: Config, doc: Discovery, attempt: Attempt, code
       cache: 'no-store',
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       headers: {
-        authorization: `Basic ${basic}`,
+        authorization: basicAuth(config),
         'content-type': 'application/x-www-form-urlencoded',
         accept: 'application/json',
       },
@@ -373,13 +395,14 @@ async function redeemCode(config: Config, doc: Discovery, attempt: Attempt, code
 }
 
 async function verifyIdToken(config: Config, doc: Discovery, attempt: Attempt, idToken: string): Promise<JWTPayload> {
+  const device = attempt.handoff !== null
   let claims: JWTPayload
   try {
     const result = await jwtVerify(idToken, jwksFor(doc.jwks_uri), {
       issuer: doc.issuer,
       audience: config.clientId,
       algorithms: ['RS256'],
-      requiredClaims: ['exp', 'sub', 'nonce', 'auth_time'],
+      requiredClaims: device ? ['exp', 'sub', 'auth_time'] : ['exp', 'sub', 'nonce', 'auth_time'],
       clockTolerance: CLOCK_SKEW_SECONDS,
     })
     claims = result.payload
@@ -395,7 +418,8 @@ async function verifyIdToken(config: Config, doc: Discovery, attempt: Attempt, i
     throw new Refusal('provider_error', 'The World signing keys did not load.')
   }
 
-  if (claims.nonce !== attempt.nonce) throw new Refusal('invalid_token', 'The ID token nonce does not match.')
+  // World omits the nonce from device tokens. Only the device code and the client secret bind them.
+  if (!device && claims.nonce !== attempt.nonce) throw new Refusal('invalid_token', 'The ID token nonce does not match.')
   if (typeof claims.acr !== 'string' || !config.acr.includes(claims.acr)) {
     throw new Refusal('unsupported_assurance', `World ID returned the acr ${String(claims.acr).slice(0, 80)}.`)
   }
@@ -406,6 +430,9 @@ async function verifyIdToken(config: Config, doc: Discovery, attempt: Attempt, i
   }
   if (authTime > Date.now() / 1000 + CLOCK_SKEW_SECONDS) {
     throw new Refusal('invalid_token', 'The ID token auth_time is in the future.')
+  }
+  if (device && !(Array.isArray(claims.amr) && claims.amr.length > 0 && claims.amr.every((item) => typeof item === 'string'))) {
+    throw new Refusal('invalid_token', 'The ID token has no amr list.')
   }
   return claims
 }
@@ -435,7 +462,7 @@ async function verifyResponse(attempt: Attempt, params: URLSearchParams): Promis
  */
 function authorize(attempt: Attempt, claims: JWTPayload) {
   if (Date.now() > attempt.expiresAt) {
-    throw new Refusal('expired', 'The 1-minute window ended before the checks finished.')
+    throw new Refusal('expired', 'The approval window ended before the checks finished.')
   }
   // A redeploy changes the token address. A mint to the old address would do nothing.
   if (!attempt.guarded && deployment().testUsdc !== attempt.token) {
@@ -450,10 +477,13 @@ function authorize(attempt: Attempt, claims: JWTPayload) {
   if (!store.openApprovals.delete(attempt.approvalId)) {
     throw new Refusal('replayed', 'This approval ID was used before.')
   }
-  if (attempt.guarded && !attempt.guarded.consume()) {
-    throw new Refusal('replayed', 'This action ran before, or it ended.')
+  // A guarded action links the person at the confirmation, so a person who only scanned the code
+  // cannot take the wallet. A second check at that moment compares the identity again.
+  if (attempt.guarded) {
+    if (!attempt.guarded.authenticated(identity)) throw new Refusal('replayed', 'This action ended before the checks finished.')
+  } else if (!linked) {
+    linkIdentity(wallet, identity)
   }
-  if (!linked) linkIdentity(wallet, identity)
   attempt.identity = linked ? 'matched' : 'linked'
   attempt.acr = claims.acr as string
   attempt.amr = Array.isArray(claims.amr) ? claims.amr.map(String) : null
@@ -462,11 +492,6 @@ function authorize(attempt: Attempt, claims: JWTPayload) {
 
 /** The stand-in for an agent spend: a mint of 1 test USDC, through the dev key like the faucet. */
 async function runProtectedAction(attempt: Attempt) {
-  if (attempt.guarded) {
-    attempt.txHash = await attempt.guarded.run()
-    attempt.stage = 'approved'
-    return
-  }
   try {
     await withDevKey(async () => {
       const hash = await devWallet.sendTransaction({
@@ -514,24 +539,194 @@ export async function handleCallback(params: URLSearchParams): Promise<string> {
   try {
     authorize(attempt, await verifyResponse(attempt, params))
   } catch (error) {
-    if (error instanceof Refusal) {
-      end(attempt, error.reason, error.detail)
-    } else {
-      console.error('[agent-pass] the checks failed:', error instanceof Error ? error.name : 'unknown')
-      end(attempt, 'provider_error', 'The server failed during the checks.')
-    }
+    refuse(attempt, error)
     return attempt.id
   }
-
-  // An agent send waits for its receipt. The browser must not wait on the World redirect for that,
-  // so the page shows the send and its result.
-  if (attempt.guarded) after(() => runProtectedAction(attempt))
-  else await runProtectedAction(attempt)
+  await runProtectedAction(attempt)
   return attempt.id
 }
 
-export function returnUrl(attemptId: string): string {
+export const returnUrl = (attemptId: string): string => `${RETURN_URL}?agentpass=${encodeURIComponent(attemptId)}`
+
+/** Ends an attempt with the reason of a failed check. */
+function refuse(attempt: Attempt, error: unknown) {
+  if (error instanceof Refusal) {
+    end(attempt, error.reason, error.detail)
+  } else {
+    console.error('[agent-pass] the checks failed:', error instanceof Error ? error.name : 'unknown')
+    end(attempt, 'provider_error', 'The server failed during the checks.')
+  }
+}
+
+type DeviceGrant = {
+  deviceCode: string
+  handoff: NonNullable<Attempt['handoff']>
+  expiresInMs: number
+  intervalMs: number
+}
+
+/** RFC 8628 section 3.2. */
+async function requestDeviceGrant(config: Config, endpoint: string): Promise<DeviceGrant> {
+  let response: Response
+  try {
+    response = await fetch(endpoint, {
+      method: 'POST',
+      cache: 'no-store',
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      headers: {
+        authorization: basicAuth(config),
+        'content-type': 'application/x-www-form-urlencoded',
+        accept: 'application/json',
+      },
+      body: new URLSearchParams({ scope: 'openid', claims: acrClaims(config) }),
+    })
+  } catch {
+    throw new ApiFailure('AGENT_PASS_UNAVAILABLE', 'World ID did not answer. An unused code can stay open until it expires.', 502)
+  }
+  if (response.status === 429) {
+    throw new ApiFailure('AGENT_PASS_RATE_LIMITED', 'World ID limits new requests now. Wait one minute, then try again.', 429)
+  }
+  if (response.status === 503) throw new ApiFailure('AGENT_PASS_UNAVAILABLE', 'World ID is not available now.', 503)
+  const body = (await response.json().catch(() => null)) as Record<string, unknown> | null
+  if (!response.ok) {
+    throw new ApiFailure('AGENT_PASS_UNAVAILABLE', `World ID returned ${plainCode(body?.error)} with HTTP ${response.status}.`, 502)
+  }
+  const { device_code: deviceCode, user_code: userCode, verification_uri: uri, verification_uri_complete: complete } = body ?? {}
+  const { expires_in: expiresIn, interval } = body ?? {}
+  if (
+    typeof deviceCode !== 'string' ||
+    typeof userCode !== 'string' ||
+    typeof uri !== 'string' ||
+    typeof expiresIn !== 'number' ||
+    expiresIn <= 0
+  ) {
+    throw new ApiFailure('AGENT_PASS_UNAVAILABLE', 'The World ID device response is not complete.', 502)
+  }
+  return {
+    deviceCode,
+    handoff: {
+      userCode,
+      verificationUri: uri,
+      verificationUriComplete: typeof complete === 'string' ? complete : null,
+    },
+    expiresInMs: expiresIn * 1000,
+    intervalMs: (typeof interval === 'number' && interval > 0 ? interval : DEFAULT_POLL_SECONDS) * 1000,
+  }
+}
+
+type PollAnswer = { kind: 'token'; idToken: string } | { kind: 'pending' | 'slow_down' | 'timeout' }
+
+/** One poll. A Refusal ends the attempt. */
+async function pollToken(config: Config, doc: Discovery, deviceCode: string, timeoutMs: number): Promise<PollAnswer> {
+  let response: Response
+  try {
+    response = await fetch(doc.token_endpoint, {
+      method: 'POST',
+      cache: 'no-store',
+      signal: AbortSignal.timeout(timeoutMs),
+      headers: {
+        authorization: basicAuth(config),
+        'content-type': 'application/x-www-form-urlencoded',
+        accept: 'application/json',
+      },
+      body: new URLSearchParams({ grant_type: DEVICE_GRANT, device_code: deviceCode }),
+    })
+  } catch {
+    return { kind: 'timeout' }
+  }
+  if (response.status === 503) {
+    throw new Refusal('provider_error', 'World ID returned HTTP 503. This attempt ended, and this is not an approval.')
+  }
+  if (response.status === 429) {
+    throw new Refusal('rate_limited', 'World ID returned HTTP 429. This attempt ended. Wait, then ask for a new code.')
+  }
+  const body = (await response.json().catch(() => null)) as { id_token?: unknown; error?: unknown } | null
+  if (response.ok) {
+    if (typeof body?.id_token === 'string') return { kind: 'token', idToken: body.id_token }
+    throw new Refusal('provider_error', 'The token response has no ID token.')
+  }
+  if (body?.error === 'authorization_pending') return { kind: 'pending' }
+  if (body?.error === 'slow_down') return { kind: 'slow_down' }
+  if (body?.error === 'expired_token') throw new Refusal('expired', 'The World ID device code expired.')
+  throw refusalForError(typeof body?.error === 'string' ? body.error : `http_${response.status}`)
+}
+
+/**
+ * Waits for the result of one device attempt. It stops at the first final answer, and it never
+ * starts a new attempt. Only a person can do that. The device code lives in this call only.
+ */
+async function pollDevice(attempt: Attempt, config: Config, doc: Discovery, deviceCode: string, firstIntervalMs: number) {
+  let interval = firstIntervalMs
+  let backoff = 0
+  for (;;) {
+    await sleep(interval + backoff)
+    expireIfDue(attempt)
+    if (attempt.stage !== 'pending') return
+    const answer = await pollToken(config, doc, deviceCode, Math.min(FETCH_TIMEOUT_MS, attempt.expiresAt - Date.now() + 1))
+    if (answer.kind === 'timeout') {
+      backoff = Math.min(backoff ? backoff * 2 : interval, MAX_BACKOFF_MS)
+      continue
+    }
+    backoff = 0
+    if (answer.kind === 'slow_down') interval += SLOW_DOWN_MS
+    if (answer.kind !== 'token') continue
+    if (attempt.stage !== 'pending') return
+    attempt.stage = 'checking'
+    authorize(attempt, await verifyIdToken(config, doc, attempt, answer.idToken))
+    attempt.stage = 'approved'
+    return
+  }
+}
+
+/** Starts a device attempt for one action and gives the attempt ID. The caller shows the handoff. */
+export async function startDeviceAttempt(wallet: Address, guarded: GuardedAction): Promise<string> {
+  const { config, doc } = await readProvider()
+  if (!doc.device_authorization_endpoint) {
+    throw new ApiFailure('AGENT_PASS_UNAVAILABLE', 'The World discovery document has no device endpoint.', 502)
+  }
+  const createdAt = Date.now()
+  const grant = await requestDeviceGrant(config, doc.device_authorization_endpoint)
+
+  prune()
+  const attempt: Attempt = {
+    id: randomUUID(),
+    state: '',
+    nonce: '',
+    codeVerifier: '',
+    approvalId: randomUUID(),
+    wallet,
+    token: null,
+    createdAt,
+    // The device code lives for 20 minutes. The action decides the real window.
+    expiresAt: Math.min(guarded.expiresAt, createdAt + grant.expiresInMs),
+    stage: 'pending',
+    reason: null,
+    detail: null,
+    txHash: null,
+    acr: null,
+    amr: null,
+    identity: null,
+    guarded,
+    handoff: grant.handoff,
+  }
+  store.byId.set(attempt.id, attempt)
+  store.openApprovals.add(attempt.approvalId)
+  // This outlives the request, as the state on globalThis does. The action window bounds it.
+  void pollDevice(attempt, config, doc, grant.deviceCode, grant.intervalMs).catch((error) => refuse(attempt, error))
+  return attempt.id
+}
+
+/** The code and the link for a person. Null when the attempt no longer waits for World ID. */
+export function deviceHandoff(attemptId: string): AgentPassDevice | null {
   const attempt = store.byId.get(attemptId)
-  const base = attempt?.guarded?.returnUrl ?? (attempt?.wallet ? RETURN_URL : AGENTS_URL)
-  return `${base}?agentpass=${encodeURIComponent(attemptId)}`
+  if (!attempt?.handoff) return null
+  expireIfDue(attempt)
+  if (attempt.stage !== 'pending' && attempt.stage !== 'checking') return null
+  return { ...attempt.handoff, expiresAt: attempt.expiresAt }
+}
+
+/** Stops the poll loop of an action that the owner closed. */
+export function cancelAttempt(attemptId: string, detail: string) {
+  const attempt = store.byId.get(attemptId)
+  if (attempt?.stage === 'pending') end(attempt, 'cancelled', detail)
 }
