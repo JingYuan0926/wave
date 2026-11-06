@@ -307,19 +307,27 @@ Each method is its own ERC-8286 frame validator. The owner installs them in Sett
 | Validator | What the user does | What the chain checks | Status |
 |---|---|---|---|
 | `WorldIDFrameValidator` | Approves in World App | A World ID 3.0 proof bound to `sig_hash` | Core |
-| `PasskeyFrameValidator` | Face ID or Touch ID | A WebAuthn P-256 assertion over `sig_hash` | Core |
-| `NfcCardFrameValidator` | Taps an NFC signing card | A signature from the key inside the card | Stretch goal |
+| `PasskeyFrameValidator` | Face ID, Touch ID or a security key | A WebAuthn P-256 assertion over `sig_hash` | Core |
+| `NfcCardFrameValidator` | Taps an NFC signing card | A signature from the key inside the card | Later. Not built. Settings shows "NFC card: coming later". |
 
 - **Face ID and Touch ID only unlock the passkey on the device.** The chain never sees a face or
   a fingerprint. It verifies the WebAuthn assertion.
 - **Passkeys can be device-bound or synced** (for example through iCloud Keychain or Google
   Password Manager). The security of a synced passkey includes the security of the sync account.
-- The passkey validator reads the WebAuthn backup flags (`BE` and `BS`). Sensitive-action
-  eligibility requires a credential that reports non-backup-eligible status.
+- **Face ID and Touch ID are probably synced passkeys.** passkeys.dev lists device-bound passkeys
+  on iOS, macOS and Android for security keys only. We have not tested this on a real device.
+  The app reads `BE` at enrolment and shows "Synced passkey" or "Device-bound passkey".
+- The passkey validator stores the WebAuthn `BE` flag at enrolment and rejects a later mismatch.
+  It also rejects `BS` when `BE` is 0.
 - **This check alone does not establish hardware-backed storage**, and it does not prove that
   Face ID was used. That would need an attestation policy.
-- Backup-eligible (synced) passkeys can approve only small transfers.
+- Backup-eligible (synced) passkeys can approve only the tiers that the owner marks as small.
+  They cannot propose or approve a fallback change (`SyncedNotAllowed`).
+- A passkey validator instance serves one slot. The deployment holds three, so an account can
+  enrol three passkeys.
 - An NFC card works only if it can sign our transaction digest with a key the chain can verify.
+  A FIDO2 NFC key should work through the passkey flow with no new contract. We have not tested
+  this.
 - Each validator uses its own nonce key, so each one has its own nonce domain. The mempool still
   allows only one pending frame transaction per sender.
 
