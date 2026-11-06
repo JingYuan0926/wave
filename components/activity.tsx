@@ -4,7 +4,7 @@ import { ArrowDownLeft, ArrowUpRight, Dot, ExternalLink } from "lucide-react";
 import { useNow } from "@/lib/ui/use-now";
 import { explorerTxUrl } from "@/lib/api-client";
 import type { ActivityItem } from "@/lib/api-types";
-import { formatTime } from "@/lib/ui/format";
+import { formatTime, shortHex } from "@/lib/ui/format";
 import { methodLabel } from "@/lib/ui/rules";
 import { Amount, Badge, Card, SectionTitle, Skeleton, focusRing } from "./ui";
 import { useWallet } from "./wallet-provider";
@@ -30,6 +30,7 @@ function Row({ item }: { item: ActivityItem }) {
           {hydrated ? formatTime(item.timestamp) : "--"}
           {item.method ? ` · ${methodLabel(item.method, info?.world)}` : ""}
         </p>
+        <p className="font-mono text-xs text-muted-foreground">{shortHex(item.txHash, 10, 8)}</p>
       </div>
       <div className="flex shrink-0 items-center gap-1 text-sm">
         {failed ? <Badge tone="danger">Failed</Badge> : null}
