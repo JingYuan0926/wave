@@ -5,9 +5,9 @@
 | `src/WaveAccount.sol` | The account. Contract route. `verify`, six SENDER entry points, configuration through the queue. |
 | `src/WavePolicy.sol` | Tiers, period counters, queue, recovery, config version. It has no frame opcodes. |
 | `src/WorldIDFrameValidator.sol` | World ID 3.0 proof over sig_hash, with a recent-root reference. |
-| `src/PasskeyFrameValidator.sol` | WebAuthn P-256 assertion over sig_hash. One instance per slot. |
+| `src/PasskeyFrameValidator.sol` | WebAuthn P-256 assertion over sig_hash. One instance per slot. It can be the owner method: the key is then in the clone config, and a recovery writes a new key to storage. |
 | `src/AgentKeyFrameValidator.sol` | secp256k1 signature over sig_hash, for agent wallets only. It is method bit 6. A main wallet cannot install it. |
-| `src/WaveAccountFactory.sol` | CREATE2 clones with the configuration in code. Main wallets and agent wallets use the same factory. |
+| `src/WaveAccountFactory.sol` | CREATE2 clones with the configuration in code. Main wallets and agent wallets use the same factory. It calls `setup` in the deploy call, so a wallet with extra methods never exists without them. |
 | `src/SemaphoreVerifier.sol` | World's Groth16 verifier, unchanged apart from one import path. |
 | `src/RecentRootRead.yul` | Runs RECENTROOTREFLOAD. The solc fork has no builtin for it. |
 | `src/WaveGasStation.sol` | The local gas sponsor. An EIP-8141 paymaster that needs the sponsor key's signature. Local network only. |
@@ -32,9 +32,14 @@ Run the end-to-end cases from the repo root:
 
 ## Rule choices
 
-- `methods`: bit 0 is World ID. Bit N is passkey slot N. Bit 7 marks a small tier.
+- `methods`: bit 0 is the owner method. Bit N is passkey slot N. Bit 7 marks a small tier.
+- The clone args name the owner method. It is World ID or a passkey validator. `_ownerValidator()` returns it, and every owner-only rule checks it.
+- `demoDelay` in the clone args is the wait. 0 means real delays. `NO_WAIT` (`0xffffffff`) means no wait. Another value caps the config, loosen, other-call and recovery delays through `effectiveDelay`. A tier delay never goes through `effectiveDelay`.
+- `setup` installs the extra methods and first rules. The clone args hold the hash of its bytes (155 bytes in all). It runs once, and no SENDER frame can reach it.
+- `setOwnerKey` is the recovery of an owner passkey. `setOwner` and `setRootSource` revert `WrongOwnerKind` on a wallet with a passkey owner, and `setOwnerKey` reverts on a World ID wallet.
 - A listed token is ETH, `defaultToken`, or a token with tiers. Other tokens are sensitive calls.
 - A plain transfer counts against the cap when it runs, or at `schedule` if it is delayed. A cancel gives no refund.
+- `dailyLimit` is one hard total per token. All methods and all tiers share one counter and one 24 hour window. `_checkTransfer` tests it first, so `DailyLimitReached` comes before any tier choice. 0 means no limit. `tighten` can add or lower it. `setTiers` can set any value, so a caller must send the current limit to keep it. `setup` can set it. `agentSetup`, `agentTighten` and `agentSetTiers` do not touch it.
 - A tighten does not change the config version. A queued transfer of that token fails with `RuleChanged`. Other queued actions continue.
 - The recovery proposal counts as the first approval.
 - A call with target 0 is a self-call, because `ERC7579Utils` runs it as one. `execute` reverts `SelfCall`. `schedule` reverts `NotSchedulable`. A recovery reverts `BadRecovery`.
@@ -42,11 +47,9 @@ Run the end-to-end cases from the repo root:
 
 ## Agent wallets
 
-Not tested. These contracts compile, but no agent wallet ran on a chain.
-
 An agent wallet is the same `WaveAccount` from the same factory. Its clone args end with 20 `master` bytes (143 bytes in all). A main wallet has 123 bytes, so its `master` reads as zero. The factory requires a nonzero master and owner 0 on an agent wallet.
 
-- The agent wallet has no World ID method and no recovery. `isValidatorInstalled` is false for World ID there.
+- The agent wallet has no owner method and no recovery. `isValidatorInstalled` is false for the clone validator there.
 - The agent spends through the normal tiers. A token with no tiers stays denied.
 - Administration uses the `IWaveAgent` functions, and each one needs `msg.sender == master`.
 
@@ -54,9 +57,9 @@ The main wallet classifies a call to its own agent wallet in `WavePolicy._agentC
 
 | Call | Who can approve | Delay |
 |---|---|---|
-| `agentSetup`, once, with the key and the first rules | World ID | None |
+| `agentSetup`, once, with the key and the first rules | The owner method | None |
 | `agentRevoke`, `agentPause`, `agentTighten`, `agentWithdraw` | Any enrolled method | None |
-| `agentUnpause`, `agentSetTiers`, `agentSetKey` | World ID, through `schedule` | 48 hours, or `demoDelay` |
+| `agentUnpause`, `agentSetTiers`, `agentSetKey` | The owner method, through `schedule` | 48 hours, or the chosen wait |
 
 - The exception needs more than the selector. `isAgentClone` reads the code of the target. The code must be a clone of this implementation that names this wallet as master.
 - Each other call to an agent wallet follows the normal rules. Plain funding follows the spending rules.
