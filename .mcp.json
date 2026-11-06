@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "wave": {
+      "command": "npx",
+      "args": ["--no-install", "tsx", "mcp/wave-server.ts"]
+    }
+  }
+}
