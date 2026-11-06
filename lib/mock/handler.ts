@@ -4,6 +4,7 @@
  * build drops the import, so no chain data on any normal run comes from here.
  */
 import { keccak256, pad, stringToHex } from "viem";
+import { slotsOf } from "@/lib/account";
 import { ApiError } from "@/lib/api-client";
 import {
   API_ROUTES,
@@ -12,6 +13,7 @@ import {
   type ActivityItem,
   type ActivityResponse,
   type Address,
+  type DailyView,
   type DecodedAction,
   type FaucetResponse,
   type FrameView,
@@ -19,6 +21,9 @@ import {
   type InfoResponse,
   type MethodRef,
   type MethodView,
+  type PasskeySlot,
+  type WalletPlan,
+  type WalletPlanResponse,
   type PendingAction,
   type Rejection,
   type RootPublishResponse,
@@ -46,7 +51,7 @@ const TOKENS: TokenInfo[] = [
 const DEMO_DELAY = 120;
 const SOURCE_ID = keccak256(stringToHex("mock-source"));
 const LATENCY_MS = 350;
-const KEY = "wave.mock.v1";
+const KEY = "wave.mock.v2";
 
 type StoredTx = {
   envelope: Hex;
@@ -67,6 +72,8 @@ type MockAccount = {
   configVersion: number;
   methods: MethodView[];
   tiers: Record<string, (Tier & { spent: string })[]>;
+  /** The hard daily total of each token. No entry means no limit. */
+  daily: Record<string, { limit: string; spent: string; start: number }>;
   pending: PendingAction[];
   activity: ActivityItem[];
 };
@@ -169,16 +176,56 @@ function refreshPending(account: MockAccount): PendingAction[] {
   });
 }
 
+const MOCK_DAY = 86400;
+
+/** The same result as WavePolicy.dailyOf, with a null when the token has no limit. */
+function dailyView(account: MockAccount, token: string): DailyView | null {
+  const daily = account.daily[token];
+  if (!daily) return null;
+  const open = daily.start > 0 && now() < daily.start + MOCK_DAY;
+  const spent = open ? BigInt(daily.spent) : BigInt(0);
+  const limit = BigInt(daily.limit);
+  return {
+    limit: daily.limit,
+    spent: spent.toString(),
+    left: (spent >= limit ? BigInt(0) : limit - spent).toString(),
+    resetsAt: open && spent > BigInt(0) ? daily.start + MOCK_DAY : null,
+  };
+}
+
+/** Writes a limit and keeps the window, as the account does. */
+function setDaily(account: MockAccount, token: string, limit: string) {
+  if (limit === "0") {
+    delete account.daily[token];
+    return;
+  }
+  const old = account.daily[token];
+  account.daily[token] = { spent: old?.spent ?? "0", start: old?.start ?? 0, limit };
+}
+
+function countDaily(account: MockAccount, token: string, amount: bigint) {
+  const daily = account.daily[token];
+  if (!daily) return;
+  if (dailyView(account, token)?.resetsAt == null) {
+    daily.start = now();
+    daily.spent = "0";
+  }
+  daily.spent = (BigInt(daily.spent) + amount).toString();
+}
+
 function accountView(account: MockAccount): AccountResponse {
   account.pending = refreshPending(account);
-  const others = account.methods.filter((m) => m.ref.kind !== "world").length;
+  const others = account.methods.filter((m) => !m.owner).length;
   return {
     address: account.address,
     deployed: account.deployed,
     balances: TOKENS.map((t) => ({ token: t.address, amount: account.balances[t.address] ?? "0" })),
     configVersion: String(account.configVersion),
     demoDelay: DEMO_DELAY,
+    waitSeconds: DEMO_DELAY,
     ownerNullifierHash: null,
+    owner: account.methods.find((m) => m.owner)?.ref ?? { kind: "world" },
+    ownerKeyX: null,
     methods: account.methods,
     rules: TOKENS.map((t) => ({
       token: t.address,
@@ -186,6 +233,7 @@ function accountView(account: MockAccount): AccountResponse {
         ...tier,
         periodEndsAt: tier.period > 0 ? now() + tier.period : null,
       })),
+      daily: dailyView(account, t.address),
     })),
     pending: account.pending,
     recovery: { otherMethods: others, available: others >= 2 },
@@ -239,7 +287,12 @@ function decodeAction(account: MockAccount, action: TxAction): DecodedAction {
         lines: [
           {
             label: action.change.kind === "owner" ? "New owner" : "New source",
-            value: action.change.kind === "owner" ? action.change.nullifierHash : action.change.sourceId,
+            value:
+              action.change.kind === "owner"
+                ? action.change.nullifierHash
+                : action.change.kind === "root-source"
+                  ? action.change.sourceId
+                  : action.change.publicKey.x,
             mono: true,
           },
         ],
@@ -340,6 +393,8 @@ function prepare(state: MockState, body: TxPrepareRequest): TxPrepareResponse {
     rootReference: root ? { sourceId: SOURCE_ID, slot: "1024", root } : null,
     deploys,
     sponsored: false,
+    runAtOnce: false,
+    runActionId: null,
   };
 }
 
@@ -378,6 +433,10 @@ function send(state: MockState, body: TxSendRequest): TxSendResponse {
     const view = accountView(account);
     const rules = view.rules.find((r) => r.token === action.token);
     const amount = BigInt(action.amount);
+    // Same order as _checkTransfer: the daily limit stops every method and every tier.
+    if (rules?.daily && amount > BigInt(rules.daily.left)) {
+      return reject("simulate", "DailyLimitReached", tx, "SENDER");
+    }
     const rule = describeSpend(rules, amount, view.methods);
     const choice = rule.choices.find((c) => sameMethod(c.view.ref, method));
     if (rule.kind === "none") return reject("simulate", "NoTier", tx, "SENDER");
@@ -394,6 +453,7 @@ function send(state: MockState, body: TxSendRequest): TxSendResponse {
       const tier = account.tiers[action.token][rule.tierIndex];
       tier.spent = (BigInt(tier.spent) + amount).toString();
     }
+    countDaily(account, action.token, amount);
     if (rule.delay > 0) {
       schedule(state, account, tx, "transfer", rule.delay);
     } else {
@@ -406,14 +466,20 @@ function send(state: MockState, body: TxSendRequest): TxSendResponse {
   }
 
   if (action.kind === "tighten") {
+    const old = BigInt(account.daily[action.token]?.limit ?? "0");
+    const next = BigInt(action.dailyLimit);
+    if (old > BigInt(0) && (next === BigInt(0) || next > old)) {
+      return reject("simulate", "NotStricter", tx, "SENDER");
+    }
     account.tiers[action.token] = action.tiers.map((t) => ({ ...t, spent: "0" }));
+    setDaily(account, action.token, action.dailyLimit);
   }
 
   if (action.kind === "cancel") {
     const target = account.pending.find((p) => p.id === action.actionId);
     if (!target) return reject("simulate", "BadStatus", tx, "SENDER");
-    if (target.cancelBy === "world" && method.kind !== "world") {
-      return reject("simulate", "OnlyWorldId", tx, "SENDER");
+    if (target.cancelBy === "owner" && !sameMethod(method, accountView(account).owner)) {
+      return reject("simulate", "OnlyOwnerMethod", tx, "SENDER");
     }
     account.pending = account.pending.filter((p) => p.id !== action.actionId);
   }
@@ -477,6 +543,7 @@ function applyScheduled(state: MockState, account: MockAccount, target: PendingA
       validator: pad(`0x${action.slot.toString(16)}`, { size: 20 }),
       mask: 1 << action.slot,
       backup: action.backupEligible ? "synced" : "device-bound",
+      owner: false,
     });
     account.configVersion += 1;
   }
@@ -488,6 +555,7 @@ function applyScheduled(state: MockState, account: MockAccount, target: PendingA
   }
   if (action.kind === "set-rules") {
     account.tiers[action.token] = action.tiers.map((t) => ({ ...t, spent: "0" }));
+    setDaily(account, action.token, action.dailyLimit);
     account.configVersion += 1;
   }
 }
@@ -521,7 +589,7 @@ function handle(
       rpcUrl: "http://localhost:8545",
       world: { mode: "dev" },
       tokens: TOKENS,
-      gasSponsored: false,
+      gasSponsored: true,
     };
     return info;
   }
@@ -627,9 +695,11 @@ function handle(
               validator: "0x00000000000000000000000000000000000000a1",
               mask: 1,
               backup: null,
+              owner: true,
             },
           ],
           tiers: {},
+          daily: {},
           pending: [],
           activity: [],
         };
@@ -639,6 +709,50 @@ function handle(
         merkleRoot: request.proof.merkleRoot,
         address: newAddress,
         salt: pad("0x00", { size: 32 }),
+      };
+      return response;
+    }
+    case API_ROUTES.walletPlan: {
+      const plan = body as WalletPlan;
+      const seed = plan.owner.kind === "world" ? plan.owner.nullifierHash : plan.owner.publicKey.x;
+      const newAddress = `0x${keccak256(seed).slice(-40)}` as Address;
+      const slots = slotsOf(plan);
+      const view = (slot: PasskeySlot, backupEligible: boolean, owner: boolean): MethodView => ({
+        ref: { kind: "passkey", slot },
+        validator: `0x00000000000000000000000000000000000000a${slot + 1}`,
+        mask: owner ? 1 : 1 << slot,
+        backup: backupEligible ? "synced" : "device-bound",
+        owner,
+      });
+      const ownerView: MethodView =
+        plan.owner.kind === "world"
+          ? {
+              ref: { kind: "world" },
+              validator: "0x00000000000000000000000000000000000000a1",
+              mask: 1,
+              backup: null,
+              owner: true,
+            }
+          : view(slots.owner as PasskeySlot, plan.owner.backupEligible, true);
+      state.accounts[newAddress.toLowerCase()] = {
+        address: newAddress,
+        owner: seed,
+        deployed: false,
+        balances: {},
+        configVersion: 1,
+        methods: [
+          ownerView,
+          ...plan.extras.map((extra, index) => view(slots.extras[index], extra.backupEligible, false)),
+        ],
+        tiers: {},
+        daily: plan.sends?.perDay ? { [USDC]: { limit: plan.sends.perDay, spent: "0", start: 0 } } : {},
+        pending: [],
+        activity: [],
+      };
+      const response: WalletPlanResponse = {
+        address: newAddress,
+        ownerSlot: slots.owner,
+        extraSlots: slots.extras,
       };
       return response;
     }

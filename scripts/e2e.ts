@@ -1,10 +1,12 @@
-// Runs the 12 WAVE cases against the live local stack, with real frame transactions, real
+// Runs the WAVE cases against the live local stack, with real frame transactions, real
 // Groth16 proofs from a dev test identity and a software P-256 WebAuthn authenticator.
 // Prints PASS or FAIL with transaction hashes. Exit code 1 if a case fails.
 // Prerequisites: devnet/up.sh, contracts deployed, scripts/fetch-zk.sh.
 import { encodeFunctionData, keccak256, numberToHex, toHex, type Address, type Hex } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
-import { cloneArgs } from '../lib/account'
+import { NO_WAIT, buildWallet } from '../lib/account'
+import { tiersAfterRemoval } from '../lib/limits'
+import type { PasskeySlot, WalletPlan } from '../lib/api-types'
 import { loadDeployment, devWallet, publicClient, LEGACY_TX, explorerLink, rpc, RPC_URL, sleep, sponsorOf, RpcError } from '../lib/chain'
 import {
   buildTx,
@@ -32,9 +34,9 @@ import {
   KIND_NORMAL,
   KIND_RECOVERY,
   NO_LIMIT,
+  OWNER_BIT,
   SMALL_TIER,
   STATUS,
-  WORLD_BIT,
   approveRecoveryData,
   cancelData,
   decodeWaveError,
@@ -48,8 +50,10 @@ import {
   passkeyInitData,
   scheduleData,
   setOwnerCall,
+  setOwnerKeyCall,
   setTiersCall,
   tightenData,
+  uninstallModuleCall,
   type Call,
   type Tier,
 } from '../lib/policy'
@@ -66,8 +70,9 @@ import { TestUSDCAbi, WaveAccountAbi, WaveAccountFactoryAbi } from '../lib/wave-
 import { SoftPasskey } from './lib/soft-passkey'
 
 const d = loadDeployment()
-const sponsor = sponsorOf(d)
-if (!sponsor) throw new Error('These cases run on the local network, with the gas station deployed.')
+const found = sponsorOf(d)
+if (!found) throw new Error('These cases run on the local network, with the gas station deployed.')
+const sponsor = found
 const DEMO_DELAY = Number(process.env.E2E_DEMO_DELAY ?? 45)
 const USDC = (n: number) => BigInt(Math.round(n * 1e6))
 const RECEIVER: Address = '0x000000000000000000000000000000000000bEEF'
@@ -313,27 +318,51 @@ async function plainTx(to: Address, data: Hex, value = 0n, gasLimit = 3_000_000n
   return { hash, status: r.status }
 }
 
-type Wallet = { account: Address; args: Hex; salt: Hex; world: Method & { kind: 'world' } }
+type Wallet = { account: Address; args: Hex; salt: Hex; setup: Hex; world: Method & { kind: 'world' } }
 
 /** The local network deploys a wallet with a plain sponsor transaction. */
-async function sponsorDeploys(w: Wallet) {
+async function sponsorDeploys(w: Pick<Wallet, 'args' | 'salt' | 'setup'>) {
   const data = encodeFunctionData({
     abi: WaveAccountFactoryAbi,
     functionName: 'createAccount',
-    args: [d.implementation, w.args, w.salt],
+    args: [d.implementation, w.args, w.salt, w.setup],
   })
-  const { status } = await plainTx(d.factory, data, 0n, 1_500_000n)
-  if (status !== 'success') throw new Error('deploy failed')
+  const { hash, status } = await plainTx(d.factory, data, 0n, w.setup === '0x' ? 1_500_000n : 6_000_000n)
+  if (status !== 'success') throw new Error(`deploy failed ${hash}`)
+  return hash
 }
+
+type Planned = { account: Address; args: Hex; salt: Hex; setup: Hex }
+
+/** A wallet from a plan, the same way that the app builds it. It holds test USDC and no ETH. */
+async function plannedWallet(plan: WalletPlan, ethFunds = 0n): Promise<Planned> {
+  const built = buildWallet({ contracts: d, plan, demoDelay: DEMO_DELAY, externalNullifierHash: ext, rootSourceId: d.rootSourceId })
+  const account = await publicClient.readContract({
+    address: d.factory,
+    abi: WaveAccountFactoryAbi,
+    functionName: 'predict',
+    args: [d.implementation, built.args, built.salt],
+  })
+  if (ethFunds > 0n) await plainTx(account, '0x', ethFunds, 600_000n)
+  const mint = encodeFunctionData({ abi: TestUSDCAbi, functionName: 'mint', args: [account, USDC(10_000)] })
+  if ((await plainTx(d.testUsdc, mint, 0n, 500_000n)).status !== 'success') throw new Error('mint failed')
+  return { account, args: built.args, salt: built.salt, setup: built.setup }
+}
+
+const keyFacts = (key: SoftPasskey) => ({ publicKey: { x: key.x, y: key.y }, backupEligible: key.backupEligible })
+const passkeyMethod = (key: SoftPasskey, slot: PasskeySlot, label: string): Method => ({ kind: 'passkey', key, slot, label })
+const LIMIT = USDC(100).toString()
+/** The creation screen's "A limit, then a stronger method": extra method 1 up to the limit, then the owner. */
+const limitOf = (amount: string): NonNullable<WalletPlan['sends']> => ({ kind: 'limit', amount, perDay: null, lower: 1, upper: 0 })
 
 async function makeWallet(tag: string, identity: TestIdentity, ethFunds = 5n * 10n ** 18n): Promise<Wallet> {
   const owner = await nullifierHashOf(identity, ext)
-  const args = cloneArgs({
-    worldIdValidator: d.worldIdValidator,
-    ownerNullifierHash: owner,
+  const { args } = buildWallet({
+    contracts: d,
+    plan: { owner: { kind: 'world', nullifierHash: numberToHex(owner, { size: 32 }) }, extras: [] },
+    demoDelay: DEMO_DELAY,
     externalNullifierHash: ext,
     rootSourceId: d.rootSourceId,
-    demoDelay: DEMO_DELAY,
   })
   const salt = keccak256(toHex(`wave-e2e-${tag}-${Date.now()}`))
   const account = await publicClient.readContract({
@@ -353,7 +382,7 @@ async function makeWallet(tag: string, identity: TestIdentity, ethFunds = 5n * 1
     500_000n,
   )
   if (mint.status !== 'success') throw new Error('mint failed')
-  return { account, args, salt, world: { kind: 'world', identity, label: 'World ID' } }
+  return { account, args, salt, setup: '0x', world: { kind: 'world', identity, label: 'World ID' } }
 }
 
 /** Scheduled id from the Scheduled log of a mined transaction. */
@@ -497,7 +526,7 @@ async function main() {
     check((await read<number>(account, 'methodBitOf', [v[0]])) === passkeyBit(1), 'passkey 1 enrolled with bit 1')
     check((await read<number>(account, 'configVersion')) === 1, 'config version is 1')
     await mustPass('passkey signs a tighten of the ETH rule', account, pk1, [
-      tightenData(ETH, [{ upTo: NO_LIMIT, cap: 0n, delay: 0, period: 0, methods: WORLD_BIT }]),
+      tightenData(ETH, [{ upTo: NO_LIMIT, cap: 0n, delay: 0, period: 0, methods: OWNER_BIT }], 0n),
     ])
   })
 
@@ -506,8 +535,8 @@ async function main() {
   const P2 = passkeyBit(2)
   const P3 = passkeyBit(3)
   const baseTiers: Tier[] = [
-    { upTo: USDC(100) - 1n, cap: USDC(120), delay: 0, period: 86_400, methods: P1 | WORLD_BIT },
-    { upTo: NO_LIMIT, cap: 0n, delay: 0, period: 0, methods: WORLD_BIT },
+    { upTo: USDC(100) - 1n, cap: USDC(120), delay: 0, period: 86_400, methods: P1 | OWNER_BIT },
+    { upTo: NO_LIMIT, cap: 0n, delay: 0, period: 0, methods: OWNER_BIT },
   ]
   const usdc = (to: Address, n: number) => executeData([erc20Transfer(d.testUsdc, to, USDC(n))])
   const preview = (validator: Address, n: number) => async () => {
@@ -526,7 +555,7 @@ async function main() {
   }
 
   await runCase('5. Passkey under 100 USDC, World ID from 100 USDC', async () => {
-    const calls = [setTiersCall(account, d.testUsdc, baseTiers)]
+    const calls = [setTiersCall(account, d.testUsdc, baseTiers, 0n)]
     const out = await mustPass('schedule rule', account, world, [scheduleData(KIND_NORMAL, calls, newSalt())])
     await runQueued('rule', account, scheduledId(out), calls)
     const b0 = await usdcBalance(RECEIVER)
@@ -641,7 +670,7 @@ async function main() {
   await runCase('10. Tighten at once, looser tighten rejected, loosen waits', async () => {
     const version = await read<number>(account, 'configVersion')
     const tighter: Tier[] = [{ ...baseTiers[0], upTo: USDC(80) - 1n, cap: USDC(120) }, baseTiers[1]]
-    await mustPass('tighten by passkey', account, pk1, [tightenData(d.testUsdc, tighter)])
+    await mustPass('tighten by passkey', account, pk1, [tightenData(d.testUsdc, tighter, 0n)])
     const now = await read<readonly Tier[]>(account, 'tiersOf', [d.testUsdc])
     check(now[0].upTo === USDC(80) - 1n, 'upTo is lower at once')
     check((await read<number>(account, 'configVersion')) === version, 'config version did not change')
@@ -649,17 +678,17 @@ async function main() {
       'looser tighten by passkey',
       account,
       pk1,
-      [tightenData(d.testUsdc, baseTiers)],
+      [tightenData(d.testUsdc, baseTiers, 0n)],
       'NotStricter',
     )
     await mustFailInFrame(
       'looser tighten by World ID',
       account,
       world,
-      [tightenData(d.testUsdc, baseTiers)],
+      [tightenData(d.testUsdc, baseTiers, 0n)],
       'NotStricter',
     )
-    const calls = [setTiersCall(account, d.testUsdc, baseTiers)]
+    const calls = [setTiersCall(account, d.testUsdc, baseTiers, 0n)]
     await mustFailInFrame('loosen schedule by passkey', account, pk1, [scheduleData(KIND_NORMAL, calls, newSalt())], 'MethodNotAllowed')
     const out = await mustPass('loosen schedule by World ID', account, world, [scheduleData(KIND_NORMAL, calls, newSalt())])
     const id = scheduledId(out)
@@ -694,7 +723,7 @@ async function main() {
     const first = await mustPass('passkey 1 proposes', account, pk1, [scheduleData(KIND_RECOVERY, calls, newSalt())])
     const id1 = scheduledId(first)
     await mustPass('passkey 2 approves', account, pk2, [approveRecoveryData(id1)])
-    await mustFailInFrame('passkey 2 cancels', account, pk2, [cancelData(id1)], 'OnlyWorldId')
+    await mustFailInFrame('passkey 2 cancels', account, pk2, [cancelData(id1)], 'OnlyOwnerMethod')
     await mustPass('World ID cancels', account, world, [cancelData(id1)])
     check(STATUS[(await read<{ status: number }>(account, 'pendingOf', [id1])).status] === 'cancelled', 'status is cancelled')
 
@@ -717,7 +746,7 @@ async function main() {
       setTiersCall(account, d.testUsdc, [
         { upTo: USDC(10), cap: 0n, delay: 0, period: 0, methods: P3 | P1 | SMALL_TIER },
         { upTo: USDC(1000), cap: 0n, delay: 0, period: 0, methods: P3 | P1 | P2 },
-      ]),
+      ], 0n),
     ]
     const out = await mustPass('schedule install and rule', account, newWorld, [scheduleData(KIND_NORMAL, calls, newSalt())])
     await runQueued('install', account, scheduledId(out), calls)
@@ -766,10 +795,433 @@ async function main() {
     const before = await publicClient.getBalance({ address: self.account })
     await mustPass('deploy and transfer', self.account, self.world, [executeData([ethTransfer(RECEIVER, 1n)])], {
       selfPaid: true,
-      deploy: { factory: d.factory, implementation: d.implementation, args: self.args, salt: self.salt },
+      deploy: { factory: d.factory, implementation: d.implementation, args: self.args, salt: self.salt, setup: '0x' },
     })
     const after = await publicClient.getBalance({ address: self.account })
     check(after < before - 1n, `the wallet paid ${before - after - 1n} wei of gas`)
+  })
+
+  const usdcAt = (to: Address, n: number) => executeData([erc20Transfer(d.testUsdc, to, USDC(n))])
+
+  await runCase('16. Passkey only: no World ID anywhere, a stranger cannot act', async () => {
+    // A synced key: the owner bit is a full method, so synced status must not limit it.
+    const ownerKey = new SoftPasskey(true)
+    const strangerKey = new SoftPasskey(true)
+    const second = new SoftPasskey()
+    const owner = passkeyMethod(ownerKey, 1, 'owner passkey')
+    const stranger = passkeyMethod(strangerKey, 1, 'stranger key')
+    const w16 = await plannedWallet({ owner: { kind: 'passkey', ...keyFacts(ownerKey) }, extras: [] })
+    check(w16.setup === '0x', 'a one-method wallet has no setup bytes')
+    check((w16.args.length - 2) / 2 === 123, 'the clone config has the same 123 bytes as a World ID wallet')
+    note(`deploy tx ${await sponsorDeploys(w16)}`)
+    check((await read<Address>(w16.account, 'ownerValidator')).toLowerCase() === v[0].toLowerCase(), 'the clone names the passkey validator')
+    check((await read<number>(w16.account, 'methodBitOf', [v[0]])) === OWNER_BIT, 'the owner passkey has the owner bit')
+    check((await read<number>(w16.account, 'methodBitOf', [d.worldIdValidator])) === 0, 'World ID is not a method of this wallet')
+    const b0 = await usdcBalance(RECEIVER)
+    await mustPass('5000 USDC by the synced owner passkey, default rule', w16.account, owner, [usdcAt(RECEIVER, 5000)])
+    check((await usdcBalance(RECEIVER)) === b0 + USDC(5000), 'receiver got 5000')
+    await mustPass('tighten by the owner passkey', w16.account, owner, [
+      tightenData(ETH, [{ upTo: NO_LIMIT, cap: 0n, delay: 0, period: 0, methods: OWNER_BIT }], 0n),
+    ])
+    const send = [executeData([ethTransfer(RECEIVER, 0n)])]
+    await mustBeRejected('a stranger key on the same validator', await buildSigned(w16.account, stranger, send), /ValidationFailed/)
+
+    const calls = [
+      installModuleCall(w16.account, v[1], passkeyInitData(second.x, second.y, false)),
+      setTiersCall(w16.account, d.testUsdc, [{ upTo: NO_LIMIT, cap: 0n, delay: 0, period: 0, methods: OWNER_BIT }], 0n),
+    ]
+    await mustBeRejected(
+      'a stranger key queues a config change',
+      await buildSigned(w16.account, stranger, [scheduleData(KIND_NORMAL, calls, newSalt())]),
+      /ValidationFailed/,
+    )
+    const out = await mustPass('the owner passkey queues a config change', w16.account, owner, [scheduleData(KIND_NORMAL, calls, newSalt())])
+    const id = scheduledId(out)
+    const p = await read<{ notBefore: number; status: number }>(w16.account, 'pendingOf', [id])
+    check(STATUS[p.status] === 'queued', 'the change is queued')
+    await callReverts(
+      'execute too early',
+      () => publicClient.simulateContract({ address: w16.account, abi: WaveAccountAbi, functionName: 'executeScheduled', args: [id, encodeBatch(calls)], account: d.devKeyAddress }),
+      'TooEarly',
+    )
+    await runQueued('config change', w16.account, id, calls)
+    check((await read<number>(w16.account, 'methodBitOf', [v[1]])) === passkeyBit(2), 'the new passkey has bit 2')
+    await mustPass('600 USDC in a tier with no small mark, by the synced owner', w16.account, owner, [usdcAt(RECEIVER, 600)])
+    await mustFailInFrame(
+      'the new passkey cannot remove the owner',
+      w16.account,
+      passkeyMethod(second, 2, 'new passkey'),
+      [scheduleData(KIND_NORMAL, [uninstallModuleCall(w16.account, v[0])], newSalt())],
+      'MethodNotAllowed',
+    )
+  })
+
+  await runCase('17. Passkey only, devnet shape: self-paid, deploy frame, no World ID', async () => {
+    const ownerKey = new SoftPasskey()
+    const owner = passkeyMethod(ownerKey, 1, 'owner passkey')
+    const self = await plannedWallet({ owner: { kind: 'passkey', ...keyFacts(ownerKey) }, extras: [] }, 5n * 10n ** 18n)
+    await mustPass('deploy and transfer', self.account, owner, [usdcAt(RECEIVER, 1)], {
+      selfPaid: true,
+      deploy: { factory: d.factory, implementation: d.implementation, ...self },
+    })
+    check((await read<number>(self.account, 'methodBitOf', [v[0]])) === OWNER_BIT, 'the first transaction deployed the wallet')
+  })
+
+  let mixed: Planned
+  const mixedKey = new SoftPasskey(true)
+
+  await runCase('18. World ID plus passkey: no proof under the limit, refused above it', async () => {
+    const person = randomIdentity()
+    const owner = await nullifierHashOf(person, ext)
+    const worldM: Method = { kind: 'world', identity: person, label: 'World ID' }
+    const pk = passkeyMethod(mixedKey, 1, 'synced extra passkey')
+    mixed = await plannedWallet({
+      owner: { kind: 'world', nullifierHash: numberToHex(owner, { size: 32 }) },
+      extras: [keyFacts(mixedKey)],
+      sends: limitOf(LIMIT),
+    })
+    note(`deploy tx ${await sponsorDeploys(mixed)}`)
+    check((await read<number>(mixed.account, 'methodBitOf', [v[0]])) === passkeyBit(1), 'the setup enrolled the passkey')
+    check((await read<number>(mixed.account, 'syncedMask')) === passkeyBit(1), 'the setup read the synced flag')
+    check((await read<number>(mixed.account, 'configVersion')) === 0, 'the setup left the config version at 0')
+    const b0 = await usdcBalance(RECEIVER)
+    const first = await mustPass('100 USDC by passkey, at once, no proof', mixed.account, pk, [usdcAt(RECEIVER, 100)])
+    check(first.frames.every((frame) => frame.ok), 'one transaction, no queue')
+    check((await usdcBalance(RECEIVER)) === b0 + USDC(100), 'receiver got 100 with no queue')
+    await mustFailInFrame('100.5 USDC by passkey', mixed.account, pk, [executeData([erc20Transfer(d.testUsdc, RECEIVER, USDC(100.5))])], 'MethodNotAllowed')
+    await mustPass('150 USDC by World ID', mixed.account, worldM, [usdcAt(RECEIVER, 150)])
+    const tiersNow = await read<readonly Tier[]>(mixed.account, 'tiersOf', [d.testUsdc])
+    await mustFailInFrame(
+      'the passkey cannot queue a rule change',
+      mixed.account,
+      pk,
+      [scheduleData(KIND_NORMAL, [setTiersCall(mixed.account, d.testUsdc, [...tiersNow], 0n)], newSalt())],
+      'MethodNotAllowed',
+    )
+  })
+
+  await runCase('19. Passkey plus security key: the key owns, the passkey has a limit', async () => {
+    const keyOwner = new SoftPasskey()
+    const device = new SoftPasskey(true)
+    const owner = passkeyMethod(keyOwner, 1, 'security key owner')
+    const extra = passkeyMethod(device, 2, 'extra passkey')
+    const w19 = await plannedWallet({
+      owner: { kind: 'passkey', ...keyFacts(keyOwner) },
+      extras: [keyFacts(device)],
+      sends: limitOf(USDC(50).toString()),
+    })
+    await sponsorDeploys(w19)
+    await mustPass('50 USDC by the extra passkey', w19.account, extra, [usdcAt(RECEIVER, 50)])
+    await mustFailInFrame('51 USDC by the extra passkey', w19.account, extra, [usdcAt(RECEIVER, 51)], 'MethodNotAllowed')
+    await mustPass('51 USDC by the owner key', w19.account, owner, [usdcAt(RECEIVER, 51)])
+    await mustFailInFrame(
+      'the extra passkey cannot propose a config change',
+      w19.account,
+      extra,
+      [scheduleData(KIND_NORMAL, [uninstallModuleCall(w19.account, v[0])], newSalt())],
+      'MethodNotAllowed',
+    )
+  })
+
+  await runCase('20. A tampered setup is refused', async () => {
+    const ownerKey = new SoftPasskey()
+    const honest = new SoftPasskey()
+    const thief = new SoftPasskey()
+    const owner = { kind: 'passkey' as const, ...keyFacts(ownerKey) }
+    const sends = limitOf(LIMIT)
+    const plan: WalletPlan = { owner, extras: [keyFacts(honest)], sends }
+    const good = await plannedWallet(plan)
+    const swap = (extras: WalletPlan['extras'], changed: WalletPlan['sends'] = sends) =>
+      buildWallet({ contracts: d, plan: { owner, extras, sends: changed }, demoDelay: DEMO_DELAY, externalNullifierHash: ext, rootSourceId: d.rootSourceId }).setup
+    const create = (args: Hex, setup: Hex) => () =>
+      publicClient.simulateContract({
+        address: d.factory,
+        abi: WaveAccountFactoryAbi,
+        functionName: 'createAccount',
+        args: [d.implementation, args, good.salt, setup],
+        account: d.devKeyAddress,
+        gas: 6_000_000n,
+      })
+    const refused = async (label: string, args: Hex, setup: Hex, reason: string) => {
+      let text = 'no revert'
+      await create(args, setup)().catch((e: Error) => (text = e.message))
+      check(text.includes(reason), `${label}: refused with "${reason}"`)
+    }
+    await refused('a higher limit', good.args, swap([keyFacts(honest)], limitOf(USDC(1_000_000).toString())), 'setup refused')
+    await refused("a stranger's key", good.args, swap([keyFacts(thief)]), 'setup refused')
+    await refused('no setup bytes', good.args, '0x', 'setup refused')
+    const bare = `0x${good.args.slice(2, 2 + 123 * 2)}` as Hex
+    await refused('setup bytes with no hash in the config', bare, good.setup, 'no setup hash')
+    const hash = await sponsorDeploys(good)
+    note(`the honest setup deploys: ${hash}`)
+    check((await read<number>(good.account, 'methodBitOf', [v[1]])) === passkeyBit(2), 'the committed key is enrolled')
+  })
+
+  await runCase('21. A method cannot join after creation without the queue', async () => {
+    const pk = passkeyMethod(mixedKey, 1, 'extra passkey')
+    const thief = new SoftPasskey()
+    const setupArgs = [
+      [{ validator: v[1], initData: passkeyInitData(thief.x, thief.y, false) }],
+      [{ token: d.testUsdc, tiers: [{ upTo: NO_LIMIT, cap: 0n, delay: 0, period: 0, methods: passkeyBit(2) }], dailyLimit: 0n }],
+    ] as const
+    const replay = encodeFunctionData({ abi: WaveAccountAbi, functionName: 'setup', args: setupArgs })
+    await callReverts(
+      'setup again from a plain tx',
+      () => publicClient.simulateContract({ address: mixed.account, abi: WaveAccountAbi, functionName: 'setup', args: setupArgs, account: d.devKeyAddress }),
+      'AlreadySetUp',
+    )
+    await callReverts(
+      'the committed setup again',
+      () => publicClient.call({ to: mixed.account, data: `${replay.slice(0, 10)}${mixed.setup.slice(2)}` as Hex, account: d.devKeyAddress }),
+      'AlreadySetUp',
+    )
+    await mustBeRejected('setup as a SENDER frame', await buildSigned(mixed.account, pk, [replay]), /SenderFrameNotAllowed/)
+    await mustFailInFrame('setup through execute', mixed.account, pk, [executeData([{ target: mixed.account, value: 0n, callData: replay }])], 'SelfCall')
+    await callReverts(
+      'installModule from a plain tx',
+      () => publicClient.simulateContract({ address: mixed.account, abi: WaveAccountAbi, functionName: 'installModule', args: [11n, v[1], passkeyInitData(thief.x, thief.y, false)], account: d.devKeyAddress }),
+      'NotScheduled',
+    )
+    check((await read<number>(mixed.account, 'methodBitOf', [v[1]])) === 0, 'no new method')
+  })
+
+  await runCase('22. A World ID only wallet from a plan still works', async () => {
+    const person = randomIdentity()
+    const owner = await nullifierHashOf(person, ext)
+    const only = await plannedWallet({ owner: { kind: 'world', nullifierHash: numberToHex(owner, { size: 32 }) }, extras: [] })
+    check((only.args.length - 2) / 2 === 123 && only.setup === '0x', 'the same 123 config bytes and no setup')
+    await sponsorDeploys(only)
+    await mustPass('2 USDC by World ID', only.account, { kind: 'world', identity: person, label: 'World ID' }, [usdcAt(RECEIVER, 2)])
+  })
+
+  await runCase('23. Recovery of an owner passkey with two other methods', async () => {
+    const lost = new SoftPasskey(true)
+    const one = new SoftPasskey()
+    const two = new SoftPasskey()
+    const fresh = new SoftPasskey()
+    const old = passkeyMethod(lost, 1, 'old owner passkey')
+    const m1 = passkeyMethod(one, 2, 'device-bound method A')
+    const m2 = passkeyMethod(two, 3, 'device-bound method B')
+    const w23 = await plannedWallet({
+      owner: { kind: 'passkey', ...keyFacts(lost) },
+      extras: [keyFacts(one), keyFacts(two)],
+      sends: limitOf(LIMIT),
+    })
+    await sponsorDeploys(w23)
+    const calls = [setOwnerKeyCall(w23.account, passkeyInitData(fresh.x, fresh.y, false))]
+    await mustFailInFrame('the owner cannot propose', w23.account, old, [scheduleData(KIND_RECOVERY, calls, newSalt())], 'MethodNotAllowed')
+    const first = await mustPass('method A proposes', w23.account, m1, [scheduleData(KIND_RECOVERY, calls, newSalt())])
+    const id1 = scheduledId(first)
+    await mustPass('method B approves', w23.account, m2, [approveRecoveryData(id1)])
+    await mustFailInFrame('method B cannot cancel', w23.account, m2, [cancelData(id1)], 'OnlyOwnerMethod')
+    await mustPass('the owner cancels', w23.account, old, [cancelData(id1)])
+    const again = await mustPass('method B proposes again', w23.account, m2, [scheduleData(KIND_RECOVERY, calls, newSalt())])
+    const id2 = scheduledId(again)
+    await mustPass('method A approves', w23.account, m1, [approveRecoveryData(id2)])
+    await runQueued('recovery', w23.account, id2, calls)
+    const data = [executeData([ethTransfer(RECEIVER, 0n)])]
+    await mustBeRejected('the old owner passkey', await buildSigned(w23.account, old, data), /ValidationFailed/)
+    await mustPass('600 USDC by the new owner passkey', w23.account, passkeyMethod(fresh, 1, 'new owner passkey'), [usdcAt(RECEIVER, 600)])
+
+    const worldCall = [setOwnerCall(w23.account, 42n)]
+    const q = await mustPass('a queued World ID owner change', w23.account, passkeyMethod(fresh, 1, 'new owner passkey'), [scheduleData(KIND_NORMAL, worldCall, newSalt())])
+    const qId = scheduledId(q)
+    const row = await read<{ notBefore: number }>(w23.account, 'pendingOf', [qId])
+    await waitUntil(BigInt(row.notBefore))
+    await callReverts(
+      'setOwner cannot run on a passkey owner',
+      () => publicClient.simulateContract({ address: w23.account, abi: WaveAccountAbi, functionName: 'executeScheduled', args: [qId, encodeBatch(worldCall)], account: d.devKeyAddress }),
+      'WrongOwnerKind',
+    )
+  })
+
+  await runCase('24. Measurement: a setup in a self-paid deploy frame', async () => {
+    const ownerKey = new SoftPasskey()
+    const extraKey = new SoftPasskey()
+    const owner = passkeyMethod(ownerKey, 1, 'owner passkey')
+    const self = await plannedWallet(
+      { owner: { kind: 'passkey', ...keyFacts(ownerKey) }, extras: [keyFacts(extraKey)], sends: limitOf(LIMIT) },
+      5n * 10n ** 18n,
+    )
+    for (const state of [400_000n, 2_000_000n]) {
+      const tx = await buildSigned(self.account, owner, [usdcAt(RECEIVER, 1)], {
+        selfPaid: true,
+        deploy: { factory: d.factory, implementation: d.implementation, ...self, state },
+      })
+      const sim = await simulate(tx).catch((e: Error) => ({ executionError: e.message }) as Simulation)
+      let sidecar = ''
+      try {
+        sidecar = `ADMITTED ${await sendToSidecar(tx)}`
+      } catch (e) {
+        sidecar = (e as Error).message
+      }
+      note(`frame state ${state}: sim ${JSON.stringify({ err: sim.executionError, halt: sim.haltReason, frame: sim.failedFrameIndex })}, sidecar: ${sidecar.slice(0, 160)}`)
+    }
+  })
+
+  await runCase('25. No wait: a loosen applies with one approval', async () => {
+    const ownerKey = new SoftPasskey()
+    const owner = passkeyMethod(ownerKey, 1, 'owner passkey')
+    const w25 = await plannedWallet({ owner: { kind: 'passkey', ...keyFacts(ownerKey) }, extras: [], wait: 0 })
+    await sponsorDeploys(w25)
+    check((await read<number>(w25.account, 'demoDelay')) === NO_WAIT, 'the clone holds NO_WAIT')
+    const strict: Tier[] = [{ upTo: USDC(10), cap: 0n, delay: 0, period: 0, methods: OWNER_BIT }]
+    await mustPass('tighten first', w25.account, owner, [tightenData(d.testUsdc, strict, 0n)])
+    const looser: Tier[] = [{ upTo: USDC(500), cap: 0n, delay: 0, period: 0, methods: OWNER_BIT }]
+    const calls = [setTiersCall(w25.account, d.testUsdc, looser, 0n)]
+    const out = await mustPass('one approval queues the loosen', w25.account, owner, [scheduleData(KIND_NORMAL, calls, newSalt())])
+    const id = scheduledId(out)
+    const { hash, status } = await plainTx(w25.account, executeScheduledData(id, calls), 0n, 8_000_000n)
+    check(status === 'success', `the loosen ran with no second approval: ${hash}`)
+    const now = await read<readonly Tier[]>(w25.account, 'tiersOf', [d.testUsdc])
+    check(now[0].upTo === USDC(500), 'the looser rule is live')
+    await mustPass('300 USDC under the looser rule', w25.account, owner, [usdcAt(RECEIVER, 300)])
+  })
+
+  await runCase('26. A 1-hour wait still refuses an early run', async () => {
+    const ownerKey = new SoftPasskey()
+    const owner = passkeyMethod(ownerKey, 1, 'owner passkey')
+    const w26 = await plannedWallet({ owner: { kind: 'passkey', ...keyFacts(ownerKey) }, extras: [], wait: 3600 })
+    await sponsorDeploys(w26)
+    check((await read<number>(w26.account, 'effectiveDelay', [172_800])) === 3600, 'a 48 hour rule waits 1 hour here')
+    const calls = [setTiersCall(w26.account, d.testUsdc, [{ upTo: USDC(500), cap: 0n, delay: 0, period: 0, methods: OWNER_BIT }], 0n)]
+    const out = await mustPass('queue the change', w26.account, owner, [scheduleData(KIND_NORMAL, calls, newSalt())])
+    const id = scheduledId(out)
+    const p = await read<{ notBefore: number; createdAt: number }>(w26.account, 'pendingOf', [id])
+    check(p.notBefore - p.createdAt === 3600, 'the action waits 3600 seconds')
+    await callReverts(
+      'run before the wait ends',
+      () => publicClient.simulateContract({ address: w26.account, abi: WaveAccountAbi, functionName: 'executeScheduled', args: [id, encodeBatch(calls)], account: d.devKeyAddress }),
+      'TooEarly',
+    )
+  })
+
+  await runCase('27. No wait does not remove a tier delay that the owner set', async () => {
+    const ownerKey = new SoftPasskey()
+    const owner = passkeyMethod(ownerKey, 1, 'owner passkey')
+    const w27 = await plannedWallet({ owner: { kind: 'passkey', ...keyFacts(ownerKey) }, extras: [], wait: 0 })
+    await sponsorDeploys(w27)
+    const tiers: Tier[] = [{ upTo: NO_LIMIT, cap: 0n, delay: 3600, period: 0, methods: OWNER_BIT }]
+    const set = [setTiersCall(w27.account, d.testUsdc, tiers, 0n)]
+    const queued = await mustPass('queue the rule', w27.account, owner, [scheduleData(KIND_NORMAL, set, newSalt())])
+    await plainTx(w27.account, executeScheduledData(scheduledId(queued), set), 0n, 8_000_000n)
+    const send = [erc20Transfer(d.testUsdc, RECEIVER, USDC(5))]
+    await mustFailInFrame('the transfer cannot skip the queue', w27.account, owner, [executeData(send)], 'NeedsSchedule')
+    const out = await mustPass('the transfer goes to the queue', w27.account, owner, [scheduleData(KIND_NORMAL, send, newSalt())])
+    const p = await read<{ notBefore: number; createdAt: number }>(w27.account, 'pendingOf', [scheduledId(out)])
+    check(p.notBefore - p.createdAt === 3600, 'the tier delay of 1 hour stands')
+    await callReverts(
+      'run before the tier delay ends',
+      () => publicClient.simulateContract({ address: w27.account, abi: WaveAccountAbi, functionName: 'executeScheduled', args: [scheduledId(out), encodeBatch(send)], account: d.devKeyAddress }),
+      'TooEarly',
+    )
+  })
+
+  await runCase('28. A large send keeps its approver after a removal', async () => {
+    const OWNER_AND_EXTRA = passkeyBit(2) | OWNER_BIT
+    const ownerKey = new SoftPasskey()
+    const extraKey = new SoftPasskey()
+    const owner = passkeyMethod(ownerKey, 1, 'owner passkey')
+    const extra = passkeyMethod(extraKey, 2, 'extra method')
+    const plan = (sends: WalletPlan['sends'], key = ownerKey): WalletPlan => ({
+      owner: { kind: 'passkey', ...keyFacts(key) },
+      extras: [keyFacts(extraKey)],
+      wait: 0,
+      sends,
+    })
+    const remove = async (account: Address, calls: Call[], by = owner) => {
+      const out = await mustPass('the owner queues the removal', account, by, [scheduleData(KIND_NORMAL, calls, newSalt())])
+      await runQueued('removal', account, scheduledId(out), calls)
+    }
+
+    const every = await plannedWallet(plan({ kind: 'every', method: 1 }))
+    await sponsorDeploys(every)
+    const everyTiers = await read<readonly Tier[]>(every.account, 'tiersOf', [d.testUsdc])
+    check(everyTiers.length === 1 && everyTiers[0].methods === OWNER_AND_EXTRA, 'every send: the rule holds the owner method too')
+    await mustPass('600 USDC by the extra method', every.account, extra, [usdcAt(RECEIVER, 600)])
+    await mustPass('600 USDC by the owner method', every.account, owner, [usdcAt(RECEIVER, 600)])
+    await remove(every.account, [uninstallModuleCall(every.account, v[1])])
+    check((await read<number>(every.account, 'methodBitOf', [v[1]])) === 0, 'the extra method is gone')
+    await mustPass('600 USDC by the owner method after the removal', every.account, owner, [usdcAt(RECEIVER, 600)])
+
+    const limit = await plannedWallet(plan({ kind: 'limit', amount: LIMIT, perDay: null, lower: 0, upper: 1 }))
+    await sponsorDeploys(limit)
+    const limitTiers = await read<readonly Tier[]>(limit.account, 'tiersOf', [d.testUsdc])
+    check(
+      limitTiers.length === 2 && limitTiers[0].methods === OWNER_BIT && limitTiers[1].methods === OWNER_AND_EXTRA,
+      'a limit: the last step holds the owner method too',
+    )
+    check(limitTiers[0].cap === 0n && limitTiers[0].period === 0, 'no step holds a total')
+    await mustPass('100 USDC by the owner method', limit.account, owner, [usdcAt(RECEIVER, 100)])
+    await mustPass('150 USDC above the limit, by the extra method', limit.account, extra, [usdcAt(RECEIVER, 150)])
+    await remove(limit.account, [uninstallModuleCall(limit.account, v[1])])
+    await mustPass('600 USDC by the owner method after the removal', limit.account, owner, [usdcAt(RECEIVER, 600)])
+
+    // An older rule, or a tighten, can name the extra method alone.
+    const oldKey = new SoftPasskey()
+    const oldOwner = passkeyMethod(oldKey, 1, 'owner passkey of the older rule')
+    const old = await plannedWallet(plan({ kind: 'every', method: 1 }, oldKey))
+    await sponsorDeploys(old)
+    const alone: Tier[] = [{ upTo: NO_LIMIT, cap: 0n, delay: 0, period: 0, methods: passkeyBit(2) }]
+    await mustPass('a tighten leaves the extra method alone', old.account, extra, [tightenData(d.testUsdc, alone, 0n)])
+    await mustFailInFrame('the owner method is out of the rule', old.account, oldOwner, [usdcAt(RECEIVER, 5)], 'MethodNotAllowed')
+    const tiers = await read<readonly Tier[]>(old.account, 'tiersOf', [d.testUsdc])
+    const fixed = tiersAfterRemoval(tiers, passkeyBit(2), await read<number>(old.account, 'enrolledMask'), await read<number>(old.account, 'syncedMask'))
+    check(fixed?.[0].methods === OWNER_BIT, 'the app repairs the rule that would have no approver')
+    await remove(old.account, [setTiersCall(old.account, d.testUsdc, fixed as Tier[], 0n), uninstallModuleCall(old.account, v[1])], oldOwner)
+    check((await read<number>(old.account, 'methodBitOf', [v[1]])) === 0, 'one action removed the method')
+    await mustPass('600 USDC by the owner method after the repair', old.account, oldOwner, [usdcAt(RECEIVER, 600)])
+  })
+
+  await runCase('29. The daily limit stops every method', async () => {
+    const identity = randomIdentity()
+    const nullifier = await nullifierHashOf(identity, ext)
+    const world: Method = { kind: 'world', identity, label: 'World ID' }
+    const key = new SoftPasskey()
+    const passkey = passkeyMethod(key, 1, 'extra passkey')
+    const w = await plannedWallet({
+      owner: { kind: 'world', nullifierHash: numberToHex(nullifier, { size: 32 }) },
+      extras: [keyFacts(key)],
+      sends: { kind: 'limit', amount: LIMIT, perDay: USDC(300).toString(), lower: 1, upper: 0 },
+    })
+    await sponsorDeploys(w)
+    const daily = () => read<readonly [bigint, bigint, bigint, number]>(w.account, 'dailyOf', [d.testUsdc])
+    const tiers = [...(await read<readonly Tier[]>(w.account, 'tiersOf', [d.testUsdc]))]
+    check((await daily())[0] === USDC(300), 'the creation setup set the limit, and the address commits to it')
+    check(tiers[0].cap === 0n && tiers[0].period === 0, 'the limit is not a tier cap')
+
+    await mustPass('a send under the limit, by the passkey', w.account, passkey, [usdcAt(RECEIVER, 100)])
+    check((await daily())[2] === USDC(200), '200 USDC left')
+
+    await mustPass('a lower limit applies at once, by the passkey', w.account, passkey, [tightenData(d.testUsdc, tiers, USDC(150))])
+    const lowered = await daily()
+    check(lowered[0] === USDC(150) && lowered[2] === USDC(50), `the limit is 150 USDC and ${lowered[2]} is left`)
+    await callReverts(
+      'the preview refuses 60 USDC',
+      () => read(w.account, 'checkTransfer', [d.worldIdValidator, d.testUsdc, USDC(60)]),
+      'DailyLimitReached',
+    )
+    await mustFailInFrame('60 USDC after the lower limit, by the passkey', w.account, passkey, [usdcAt(RECEIVER, 60)], 'DailyLimitReached')
+    await mustPass('the last 50 USDC, by the passkey', w.account, passkey, [usdcAt(RECEIVER, 50)])
+
+    const before = await usdcBalance(RECEIVER)
+    await mustFailInFrame('1 USDC after the limit, by the passkey', w.account, passkey, [usdcAt(RECEIVER, 1)], 'DailyLimitReached')
+    await mustFailInFrame('1 USDC after the limit, by World ID', w.account, world, [usdcAt(RECEIVER, 1)], 'DailyLimitReached')
+    await mustFailInFrame('150 USDC after the limit, by World ID', w.account, world, [usdcAt(RECEIVER, 150)], 'DailyLimitReached')
+    check((await usdcBalance(RECEIVER)) === before, 'no token moved after the limit')
+
+    await mustFailInFrame('a higher limit in a tighten, by World ID', w.account, world, [tightenData(d.testUsdc, tiers, USDC(500))], 'NotStricter')
+    await mustFailInFrame('no limit in a tighten, by the passkey', w.account, passkey, [tightenData(d.testUsdc, tiers, 0n)], 'NotStricter')
+    const raise = [setTiersCall(w.account, d.testUsdc, tiers, USDC(500))]
+    await mustFailInFrame('a higher limit by the passkey', w.account, passkey, [scheduleData(KIND_NORMAL, raise, newSalt())], 'MethodNotAllowed')
+    const out = await mustPass('a higher limit by the owner method', w.account, world, [scheduleData(KIND_NORMAL, raise, newSalt())])
+    const id = scheduledId(out)
+    check((await daily())[0] === USDC(150), 'the higher limit waits in the queue')
+    await mustFailInFrame('1 USDC while the higher limit waits', w.account, world, [usdcAt(RECEIVER, 1)], 'DailyLimitReached')
+    await runQueued('the higher limit', w.account, id, raise)
+    const raised = await daily()
+    check(raised[0] === USDC(500) && raised[1] === USDC(150) && raised[2] === USDC(350), 'the window keeps what was sent')
+    await mustPass('a send under the higher limit, by the passkey', w.account, passkey, [usdcAt(RECEIVER, 100)])
   })
 
   console.log('\n=== VERIFY gas')

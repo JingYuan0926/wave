@@ -26,6 +26,8 @@ import {
   type TxPrepared,
   type TxSendResponse,
   type TxStatusResponse,
+  type WalletPlan,
+  type WalletPlanResponse,
   type WorldDevProofResponse,
   type WorldVerifyResponse,
 } from '../lib/api-types'
@@ -94,7 +96,7 @@ async function prepare(
 ): Promise<TxPrepareResponse> {
   const request: TxPrepareRequest = {
     account: wallet.address,
-    deployment: deployed ? undefined : { ownerNullifierHash: wallet.owner, salt: wallet.salt },
+    deployment: deployed ? undefined : { owner: { kind: 'world', nullifierHash: wallet.owner }, extras: [] },
     action,
     method,
     rootHint: wallet.rootHint,
@@ -203,7 +205,7 @@ async function full(wallet: Wallet) {
   ]
   const { d } = { d: await get<InfoResponse>(API_ROUTES.info) }
   const token = d.tokens.find((t) => t.isTest)?.address as Address
-  sentOk((await sendWithWorld(wallet, { kind: 'set-rules', token, tiers }, true)).sent, 'schedule set-rules')
+  sentOk((await sendWithWorld(wallet, { kind: 'set-rules', token, tiers, dailyLimit: '0' }, true)).sent, 'schedule set-rules')
   await runQueued(wallet, /Change tUSDC rules/)
   const ruled = await accountOf(wallet.address)
   const usdcRules = ruled.rules.find((r) => r.token === token)
@@ -229,6 +231,7 @@ async function full(wallet: Wallet) {
     kind: 'set-rules',
     token: ETH_TOKEN,
     tiers: [{ upTo: '1', cap: '0', delay: 0, period: 0, methods: 1, small: false }],
+    dailyLimit: '0',
   })
   rejectedWith(queuedByKey.ok ? undefined : queuedByKey.rejection, 'MethodNotAllowed', 'chain', 'set-rules by passkey')
 
@@ -238,15 +241,16 @@ async function full(wallet: Wallet) {
       kind: 'tighten',
       token,
       tiers: [{ ...tiers[0], upTo: usdc(80) }, tiers[1]],
+      dailyLimit: '0',
     }),
     'tighten by passkey',
   )
-  const looser = await sendWithWorld(wallet, { kind: 'tighten', token, tiers }, true)
+  const looser = await sendWithWorld(wallet, { kind: 'tighten', token, tiers, dailyLimit: '0' }, true)
   rejectedWith(looser.sent.ok ? undefined : looser.sent.rejection, 'NotStricter', 'chain', 'looser tighten by World ID')
 
-  sentOk((await sendWithWorld(wallet, { kind: 'set-rules', token, tiers }, true)).sent, 'schedule loosen')
+  sentOk((await sendWithWorld(wallet, { kind: 'set-rules', token, tiers, dailyLimit: '0' }, true)).sent, 'schedule loosen')
   const loosen = await queued(wallet, /Change tUSDC rules/)
-  check(loosen.decoded.lines.some((line) => line.label === 'Tier 1'), 'a pending row carries its tier lines')
+  check(loosen.decoded.lines.some((line) => line.label === 'Limit 1'), 'a pending row carries its limit lines')
   sentOk(await sendWithPasskey(wallet, key, { kind: 'cancel', actionId: loosen.id }), 'passkey cancels the loosen')
   const left = (await accountOf(wallet.address)).pending.filter((item) => item.id === loosen.id)
   check(left.length === 0, 'the cancelled action left the pending list')
@@ -305,8 +309,67 @@ async function full(wallet: Wallet) {
   const cancelReview = must(await prepare(wallet, { kind: 'cancel', actionId }, WORLD, true), 'cancel')
   check(cancelReview.decoded.lines.some((line) => line.value === newOwner), 'the cancel review shows the new owner')
   const passkeyCancel = await prepare(wallet, { kind: 'cancel', actionId }, PASSKEY_1, true)
-  rejectedWith(passkeyCancel.ok ? undefined : passkeyCancel.rejection, 'OnlyWorldId', 'prepare', 'a passkey cancels a recovery')
+  rejectedWith(passkeyCancel.ok ? undefined : passkeyCancel.rejection, 'OnlyOwnerMethod', 'prepare', 'a passkey cancels a recovery')
   sentOk((await sendWithWorld(wallet, { kind: 'cancel', actionId }, true)).sent, 'World ID cancels the recovery')
+}
+
+/**
+ * A rule that a tighten left with the extra method alone. The removal must repair the rule in the
+ * same action, so a large send keeps its approver.
+ */
+async function removalRepair(rootHint: Hex, token: Address) {
+  const ownerKey = new SoftPasskey()
+  const extraKey = new SoftPasskey()
+  const facts = (key: SoftPasskey) => ({ publicKey: { x: key.x, y: key.y }, backupEligible: false })
+  const plan: WalletPlan = {
+    owner: { kind: 'passkey', ...facts(ownerKey) },
+    extras: [facts(extraKey)],
+    wait: 0,
+    sends: { kind: 'every', method: 1 },
+  }
+  const planned = await post<WalletPlanResponse>(API_ROUTES.walletPlan, plan)
+  check(planned.ownerSlot === 1 && planned.extraSlots[0] === 2, `plan: owner slot ${planned.ownerSlot}, extra slot ${planned.extraSlots[0]}`)
+  const wallet: Wallet = { address: planned.address, owner: rootHint, salt: rootHint, rootHint, identity: newIdentity() }
+  await mineDevTx(token, encodeFunctionData({ abi: TestUSDCAbi, functionName: 'mint', args: [wallet.address, BigInt(usdc(1000))] }))
+
+  const alone: Tier[] = [{ upTo: String(2n ** 96n - 1n), cap: '0', delay: 0, period: 0, methods: 4, small: false }]
+  const tighten = must(
+    await post<TxPrepareResponse>(API_ROUTES.txPrepare, {
+      account: wallet.address,
+      deployment: plan,
+      action: { kind: 'tighten', token, tiers: alone, dailyLimit: '0' },
+      method: { kind: 'passkey', slot: 2 },
+    }),
+    'tighten',
+  )
+  sentOk(
+    await post<TxSendResponse>(API_ROUTES.txSend, {
+      envelope: tighten.envelope,
+      method: tighten.method,
+      witness: { kind: 'passkey', slot: 2, data: extraKey.sign(tighten.sigHash) },
+    }),
+    'the extra method leaves itself alone in the rule',
+  )
+  const before = await accountOf(wallet.address)
+  check(before.rules.find((r) => r.token === token)?.tiers[0].methods === 4, 'the owner method is out of the rule')
+
+  const removal = must(await prepare(wallet, { kind: 'remove-passkey', slot: 2 }, PASSKEY_1, true), 'remove-passkey')
+  check(removal.decoded.title === 'Remove passkey in slot 2, and change limits', `review title: ${removal.decoded.title}`)
+  check(removal.runAtOnce, 'a wallet with no wait runs the removal at once')
+  console.log(`  review: ${JSON.stringify(removal.decoded)}`)
+  const sent = await post<TxSendResponse>(API_ROUTES.txSend, {
+    envelope: removal.envelope,
+    method: removal.method,
+    witness: { kind: 'passkey', slot: 1, data: ownerKey.sign(removal.sigHash) },
+  })
+  sentOk(sent, 'the owner approves the removal')
+  const actionId = sent.ok ? sent.scheduledId : undefined
+  const ran = await post<{ txHash: Hex }>(API_ROUTES.runScheduled, { account: wallet.address, actionId })
+  console.log(`  run: tx ${ran.txHash}`)
+  const after = await accountOf(wallet.address)
+  check(after.methods.length === 1 && after.methods[0].owner, 'the extra method is gone')
+  check(after.rules.find((r) => r.token === token)?.tiers[0].methods === 1, 'the rule names the owner method')
+  sentOk(await sendWithPasskey(wallet, ownerKey, { kind: 'transfer', token, to: RECEIVER, amount: usdc(600) }), '600 tUSDC by the owner method')
 }
 
 async function mineDevTx(to: Address, data: Hex, value = 0n) {
@@ -435,7 +498,7 @@ async function main() {
     body: JSON.stringify({ address: wallet.address }),
   })
   check(foreign.status === 403, `a call from another site gets ${foreign.status}`)
-  const deployment = { ownerNullifierHash: wallet.owner, salt: wallet.salt }
+  const deployment: WalletPlan = { owner: { kind: 'world', nullifierHash: wallet.owner }, extras: [] }
   await post(API_ROUTES.txPrepare, { account: wallet.address, deployment, method: WORLD, rootHint: '0x', action: { kind: 'demo-stranger' } }).then(
     () => check(false, 'an empty root hint passed'),
     failing('BAD_REQUEST'),
@@ -480,7 +543,11 @@ async function main() {
   check(stranger.scans === 2, `the second scan followed a root change: ${stranger.scans} scans`)
   rejectedWith(stranger.sent.ok ? undefined : stranger.sent.rejection, 'NullifierMismatch', 'simulate', 'different human')
 
-  if (FULL) await full(wallet)
+  if (FULL) {
+    await full(wallet)
+    console.log('\n--- a removal keeps an approver for large sends')
+    await removalRepair(wallet.rootHint, testUsdc)
+  }
 
   console.log(failures === 0 ? '\nAPI smoke passed' : `\nAPI smoke FAILED: ${failures} checks`)
   process.exit(failures === 0 ? 0 : 1)
