@@ -5,14 +5,15 @@
 *Your identity. Your wallet. Your rules.*
 
 **A wallet you create and approve with World ID, with no seed phrase and no separate EOA
-signing key.** Add passkeys or NFC signing cards later. The account enforces permissions and
-delays onchain.
+signing key.** Add passkeys in Settings. The account enforces permissions and delays onchain.
+NFC signing cards come later.
 
 Built at ETHGlobal Mumbai 2026 on EIP-8141 frame transactions, ERC-8286 frame validators,
 EIP-8250 keyed nonces and EIP-8272 recent roots.
 
-> **Status: design and prototype.** This README describes the design. A claim is proven only
-> when its item in [Build status](#build-status) is checked. Not audited.
+> **Status: a working prototype on a local stack.** Every test ran on a local chain with a
+> local sidecar. No real World ID scan has run yet. No real Face ID or Touch ID has run yet.
+> A claim is proven only when its item in [Build status](#build-status) is checked. Not audited.
 
 **What the name means:** the account first checks **authorization**: does the owner's rule allow
 this method for this action? Then it **verifies** the World ID proof or the passkey assertion.
@@ -37,15 +38,17 @@ and cancel rules. "Verified Execution" does not mean a separate cryptographic pr
 1. **No seed phrase and no separate EOA signing key.** At creation, the account's only validator
    is a World ID check. World ID still uses cryptographic secrets. World App on the owner's phone
    holds them, and the owner never manages them as a seed phrase.
-2. **Mix and match.** In Settings, the owner can add passkeys (Face ID or Touch ID) or NFC
-   signing cards. These methods bring their own keys, held in the device or in the card. The
-   owner chooses which method approves which action.
+2. **Mix and match.** In Settings, the owner can add passkeys (Face ID, Touch ID or a security
+   key). NFC signing cards come later. These methods bring their own keys, held in the device or
+   in the card. The owner chooses which method approves which action.
 3. **Owner-set limits.** The owner sets amount limits per method. For example, Face ID approves
    transfers under 100 USDC, and World ID approves 100 USDC or more. The owner also sets time
    limits: a delay for each tier, and totals per day or per week.
 4. **A cancellation window.** Sensitive actions are scheduled first and run only after a delay.
    Enrolled methods can cancel them, under the cancel rules below. Spending under the daily limit
    stays immediate.
+5. **Wallets for your agents (built, not tested).** Create a separate WAVE wallet for each agent.
+   Give each one its own balance and spending limits. Your main WAVE wallet is its master.
 
 ## How it works
 
