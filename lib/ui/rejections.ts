@@ -7,11 +7,11 @@ const EXPLANATIONS: Record<string, Explanation> = {
   // Custom errors from contracts/src.
   MethodNotAllowed: {
     title: "This method cannot approve this",
-    detail: "The owner's rule names other methods for this action.",
+    detail: "Your limits name another method for this amount.",
   },
   SyncedNotAllowed: {
     title: "A synced passkey cannot approve this",
-    detail: "A synced passkey approves small tiers only.",
+    detail: "A synced passkey cannot approve this amount. Use your stronger method.",
   },
   NeedsSchedule: {
     title: "This transfer must wait",
@@ -21,21 +21,25 @@ const EXPLANATIONS: Record<string, Explanation> = {
     title: "This call must go through the queue",
     detail: "Only plain transfers can run at once. Other calls wait in the queue.",
   },
-  NoTier: {
-    title: "No rule allows this amount",
-    detail: "The period caps may be full. Add a tier in Settings, send less, or wait.",
+  DailyLimitReached: {
+    title: "You reached your daily limit",
+    detail: "No method can send more of this token until the 24 hours end. Send less, or wait. Nothing was sent.",
   },
-  OnlyWorldId: {
-    title: "This action needs World ID",
-    detail: "Only World ID can do this.",
+  NoTier: {
+    title: "Your limits do not allow this amount",
+    detail: "Change your limits in Settings, send less, or wait for your daily limit to reset.",
+  },
+  OnlyOwnerMethod: {
+    title: "This action needs the owner method",
+    detail: "Only the owner method can do this.",
   },
   NotStricter: {
-    title: "These rules are not stricter",
-    detail: "A looser change needs World ID and waits in the queue.",
+    title: "These limits are not stricter",
+    detail: "A looser change needs the owner method.",
   },
   BadTiers: {
-    title: "These rules are not valid",
-    detail: "Upper amounts must rise from tier to tier. A period cap needs a period.",
+    title: "These limits are not valid",
+    detail: "Each limit must be at or above the one before it.",
   },
   SenderFrameNotAllowed: {
     title: "Rejected at validation",
@@ -71,7 +75,7 @@ const EXPLANATIONS: Record<string, Explanation> = {
   },
   BadRecovery: {
     title: "This recovery is not valid",
-    detail: "A recovery holds exactly one owner or root source change.",
+    detail: "A recovery holds exactly one owner, owner passkey or root source change.",
   },
   NotEnrolled: {
     title: "This method is not enrolled",

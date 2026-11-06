@@ -1,4 +1,5 @@
 import type {
+  Address,
   MethodRef,
   MethodView,
   PasskeySlot,
@@ -9,8 +10,9 @@ import type {
   TokenRules,
   WorldConfig,
 } from "@/lib/api-types";
-import { PASSKEY_SLOTS, WORLD_METHOD_MASK } from "@/lib/api-types";
-import { delayText, formatDuration, formatPeriod, parseTokenAmount, plainAmount } from "./format";
+import { OWNER_METHOD_MASK, PASSKEY_SLOTS } from "@/lib/api-types";
+import { formatDuration, formatPeriod, parseTokenAmount, plainAmount } from "./format";
+import { findPasskey, type LocalPasskey, type LocalState } from "./local";
 
 export const WORLD_ID: MethodRef = { kind: "world" };
 
@@ -19,6 +21,17 @@ const UINT96_MAX = (BigInt(1) << BigInt(96)) - BigInt(1);
 
 /** Above the gas limit of a World ID send that also deploys, at the fee the app signs. */
 export const ETH_GAS_RESERVE = BigInt("12000000000000000");
+
+/** The name that the owner knows a method by: "Security key", "Passkey 1" or "World ID". */
+export function plainName(
+  view: MethodView,
+  wallet: { address: Address } | null,
+  local: LocalState | null,
+  world?: WorldConfig | null,
+): string {
+  const held = view.ref.kind === "passkey" && wallet && local ? findPasskey(local, wallet.address, view.ref.slot) : null;
+  return nameFor(view.ref, held, world);
+}
 
 export function sameMethod(a: MethodRef, b: MethodRef): boolean {
   if (a.kind === "passkey" && b.kind === "passkey") return a.slot === b.slot;
@@ -36,16 +49,23 @@ export function methodLabel(ref: MethodRef, world?: WorldConfig | null): string 
   return world?.mode === "dev" ? "Test identity" : "World ID";
 }
 
+/** A security key has its own name in this browser. The chain sees a passkey. */
+export const nameFor = (ref: MethodRef, passkey?: LocalPasskey | null, world?: WorldConfig | null): string =>
+  passkey?.name === "security-key" ? "Security key" : methodLabel(ref, world);
+
 /** Text for one enrolled method, for example "Passkey 1 (synced)". */
-export function methodDetail(view: MethodView, world?: WorldConfig | null): string {
-  const label = methodLabel(view.ref, world);
-  if (view.backup === "synced") return `${label} (synced)`;
-  if (view.backup === "device-bound") return `${label} (device-bound)`;
-  return world?.mode === "dev" ? `${label} (not a real World ID)` : label;
+export function methodDetail(view: MethodView, world?: WorldConfig | null, name?: string): string {
+  const label = name ?? methodLabel(view.ref, world);
+  const notes = [
+    ...(view.owner ? ["owner method"] : []),
+    ...(view.backup ? [view.backup] : []),
+    ...(view.ref.kind === "world" && world?.mode === "dev" ? ["not a real World ID"] : []),
+  ];
+  return notes.length > 0 ? `${label} (${notes.join(", ")})` : label;
 }
 
 /**
- * Who can act on a recovery. The account accepts only device-bound methods other than World ID.
+ * Who can act on a recovery. The account accepts only device-bound methods other than the owner method.
  * `approved` lists the methods that already count: the account adds nothing for them.
  */
 export function recoveryChoices(
@@ -54,8 +74,8 @@ export function recoveryChoices(
   approved: MethodRef[] = [],
 ): MethodChoice[] {
   return methods.map((view) => {
-    if (view.ref.kind === "world") {
-      return { view, allowed: false, reason: `${methodLabel(view.ref, world)} cannot run a recovery.` };
+    if (view.owner) {
+      return { view, allowed: false, reason: `${methodLabel(view.ref, world)} is the owner method. It cannot run a recovery.` };
     }
     if (view.backup === "synced") {
       return { view, allowed: false, reason: "A synced passkey cannot run a recovery." };
@@ -117,14 +137,17 @@ export function matchTier(
   return null;
 }
 
-/** Tell the owner which rule applies and which methods can approve it. */
+const orJoin = (names: string[]) => names.join(" or ");
+
+/** Tell the owner which method this amount needs. `nameOf` gives each method its plain name. */
 export function describeSpend(
   rules: TokenRules | undefined,
   amount: bigint,
   methods: MethodView[],
-  demoDelay = 0,
+  nameOf: (view: MethodView) => string = (view) => methodLabel(view.ref),
 ): SpendRule {
   const tiers = rules?.tiers ?? [];
+  const owner = methods.find((view) => view.owner);
 
   if (tiers.length === 0) {
     return {
@@ -132,11 +155,11 @@ export function describeSpend(
       tierIndex: null,
       tier: null,
       delay: 0,
-      summary: "Default rule: World ID only, no delay.",
+      summary: `Your limit needs ${owner ? nameOf(owner) : "the owner method"} for this amount.`,
       choices: methods.map((view) => ({
         view,
-        allowed: view.ref.kind === "world",
-        reason: view.ref.kind === "world" ? undefined : "This token has no rule for this method.",
+        allowed: view.owner,
+        reason: view.owner ? undefined : "Your limits do not use this method for this token.",
       })),
     };
   }
@@ -148,40 +171,43 @@ export function describeSpend(
       tierIndex: null,
       tier: null,
       delay: 0,
-      summary: "No rule allows this amount. Add a tier in Settings, or send less.",
+      summary: "Your limits do not allow this amount. Change them in Settings, or send less.",
       choices: methods.map((view) => ({
         view,
         allowed: false,
-        reason: "No rule allows this amount.",
+        reason: "Your limits do not allow this amount.",
       })),
     };
   }
 
   const { tier, index } = match;
+  const choices: MethodChoice[] = methods.map((view) => {
+    if (!maskHas(tier.methods, view)) {
+      return { view, allowed: false, reason: "Your limits name another method for this amount." };
+    }
+    // The owner bit is a full method, so a synced owner passkey has no such limit.
+    if (view.backup === "synced" && !view.owner && !tier.small) {
+      return { view, allowed: false, reason: "A synced passkey cannot approve this amount." };
+    }
+    return { view, allowed: true };
+  });
+  const names = choices.filter((choice) => choice.allowed).map((choice) => nameOf(choice.view));
+  // An earlier step would fit this amount, so its own total moved the send here.
+  const stepFull = tiers.slice(0, index).some((earlier) => amount <= BigInt(earlier.upTo));
+  const needs =
+    names.length > 0
+      ? `Your limit needs ${orJoin(names)} for this amount.`
+      : "No method can approve this amount. Change your limits in Settings.";
+  const waits =
+    tier.delay > 0 ? ` It waits ${formatDuration(tier.delay).toLowerCase()}, and you can cancel it.` : "";
   return {
     kind: "tier",
     tierIndex: index,
     tier,
     delay: tier.delay,
-    summary:
-      tier.delay > 0
-        ? `Tier ${index + 1} applies. The transfer waits in the queue, and you can cancel it. ${spendDelay(tier.delay, demoDelay)}.`
-        : `Tier ${index + 1} applies. The transfer runs at once.`,
-    choices: methods.map((view) => {
-      if (!maskHas(tier.methods, view)) {
-        return { view, allowed: false, reason: `Tier ${index + 1} does not name this method.` };
-      }
-      if (view.backup === "synced" && !tier.small) {
-        return { view, allowed: false, reason: "A synced passkey approves small tiers only." };
-      }
-      return { view, allowed: true };
-    }),
+    summary: `${stepFull ? "An earlier step reached its total. " : ""}${needs}${waits}`,
+    choices,
   };
-}
-
-function spendDelay(real: number, demoDelay: number): string {
-  const text = delayText(real, demoDelay);
-  return text.startsWith("Demo") ? text : `Delay: ${text.toLowerCase()}`;
 }
 
 export type RulesChange = {
@@ -216,18 +242,34 @@ function isStricterTier(before: Tier, after: Tier): boolean {
   );
 }
 
+type Direction = RulesChange["direction"];
+
+/** How a new daily limit compares with the live one. 0 means no limit, so it is the loosest value. */
+export function dailyDirection(before: string, after: string): Direction {
+  const [old, next] = [BigInt(before), BigInt(after)];
+  if (old === next) return "same";
+  if (old === BigInt(0)) return "stricter";
+  return next === BigInt(0) || next > old ? "looser" : "stricter";
+}
+
+/** One save holds a rule and a daily limit. If one of them is looser, the whole save is looser. */
+export function joinDirections(a: Direction, b: Direction): Direction {
+  if (a === "looser" || b === "looser") return "looser";
+  return a === "same" ? b : a;
+}
+
 /** The rule of a token with no tiers, as the account reads it in `tighten`. */
 const DEFAULT_TIER: Tier = {
   upTo: ((BigInt(1) << BigInt(96)) - BigInt(1)).toString(),
   cap: "0",
   delay: 0,
   period: 0,
-  methods: WORLD_METHOD_MASK,
+  methods: OWNER_METHOD_MASK,
   small: false,
 };
 
 function capText(tier: Tier, token: TokenInfo): string {
-  if (BigInt(tier.cap) === BigInt(0)) return "no cap";
+  if (BigInt(tier.cap) === BigInt(0)) return "no total limit";
   const amount = plainAmount(tier.cap, token.decimals);
   return `${amount} ${token.symbol} per ${formatPeriod(tier.period)}`;
 }
@@ -246,7 +288,7 @@ function describeTierDiff(
   world?: WorldConfig | null,
 ): string[] {
   const lines: string[] = [];
-  const name = `Tier ${row + 1}`;
+  const name = `Limit ${row + 1}`;
   if (before.upTo !== after.upTo) {
     lines.push(
       `${name}: upper amount ${plainAmount(before.upTo, token.decimals)} to ${plainAmount(after.upTo, token.decimals)} ${token.symbol}.`,
@@ -261,10 +303,7 @@ function describeTierDiff(
     lines.push(`${name}: delay ${formatDuration(before.delay)} to ${formatDuration(after.delay)}.`);
   }
   if (before.cap !== after.cap || before.period !== after.period) {
-    lines.push(`${name}: cap ${capText(before, token)} to ${capText(after, token)}.`);
-  }
-  if (before.small !== after.small) {
-    lines.push(`${name}: small tier ${after.small ? "on" : "off"}.`);
+    lines.push(`${name}: ${capText(before, token)} to ${capText(after, token)}.`);
   }
   return lines;
 }
@@ -278,7 +317,7 @@ function describeTier(tier: Tier, token: TokenInfo, methods: MethodView[], world
  * Compare the draft with the chain. This follows `_tighten` in WavePolicy.sol.
  * Each new tier must be stricter than the old tier at the same index. A
  * shorter list is stricter. A longer list and an empty list are looser. A token
- * with no tiers counts as one tier: any amount, World ID, no delay.
+ * with no tiers counts as one tier: any amount, the owner method, no delay.
  */
 export function compareRules(
   chain: Tier[],
@@ -293,10 +332,10 @@ export function compareRules(
 
   const changes: string[] = [];
   chain.slice(draft.length).forEach((tier, offset) => {
-    changes.push(`Remove tier ${draft.length + offset + 1}: ${describeTier(tier, token, methods, world)}.`);
+    changes.push(`Remove limit ${draft.length + offset + 1}: ${describeTier(tier, token, methods, world)}.`);
   });
   draft.slice(chain.length).forEach((tier, offset) => {
-    changes.push(`Add tier ${chain.length + offset + 1}: ${describeTier(tier, token, methods, world)}.`);
+    changes.push(`Add limit ${chain.length + offset + 1}: ${describeTier(tier, token, methods, world)}.`);
   });
   chain.slice(0, draft.length).forEach((tier, row) => {
     changes.push(...describeTierDiff(row, tier, draft[row], token, methods, world));
@@ -319,23 +358,27 @@ export function tierAmountError(text: string, token: TokenInfo, optional: boolea
   const parsed = parseTokenAmount(text, token.decimals);
   if (parsed.error !== null) return parsed.error;
   // Onchain, a cap of 0 means no cap. Nobody means that when they type 0.
-  if (optional && parsed.value === BigInt(0)) return "Leave this empty for no cap.";
+  if (optional && parsed.value === BigInt(0)) return "Leave this empty for no limit.";
   return parsed.value > UINT96_MAX ? "This amount is too large." : null;
 }
 
-/** Problems that stop a save. An empty list means that the draft is valid. */
-export function validateTiers(tiers: Tier[], token: TokenInfo): string[] {
-  const problems: string[] = [];
-  tiers.forEach((tier, row) => {
-    const name = `Tier ${row + 1}`;
-    if (BigInt(tier.upTo) <= BigInt(0)) problems.push(`${name}: enter an upper amount.`);
-    if (tier.methods === 0) problems.push(`${name}: pick at least one method.`);
-    if (BigInt(tier.cap) > BigInt(0) && tier.period === 0) {
-      problems.push(`${name}: a period cap needs a period.`);
-    }
-    if (row > 0 && BigInt(tier.upTo) < BigInt(tiers[row - 1].upTo)) {
-      problems.push(`${name}: the upper amount must not be below tier ${row} (${token.symbol}).`);
-    }
-  });
-  return problems;
+/** The one line about a save. It names a wait only if the wallet has one. */
+export function saveLine(
+  direction: "stricter" | "looser",
+  ownerName: string,
+  waitSeconds: number | null,
+  real: number,
+): string {
+  if (direction === "stricter") return "Stricter: applies at once.";
+  const needs = `Looser: needs ${ownerName}.`;
+  if (waitSeconds === 0) return needs;
+  const applied = waitSeconds !== null && waitSeconds < real ? waitSeconds : real;
+  return `${needs} It waits ${formatDuration(applied).toLowerCase()}, and you can cancel it.`;
+}
+
+/** How an owner change runs on this wallet. `waitSeconds` comes from the account. */
+export function changeTiming(waitSeconds: number | null, real: number): string {
+  if (waitSeconds === 0) return "It runs at once, and you cannot cancel it.";
+  const applied = waitSeconds !== null && waitSeconds < real ? waitSeconds : real;
+  return `It waits ${formatDuration(applied).toLowerCase()} in the queue, and you can cancel it during that time.`;
 }

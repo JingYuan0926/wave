@@ -1,3 +1,4 @@
+import { appliedDelay } from "../account";
 /**
  * Display formatting. These functions use BigInt, so a value never passes
  * through a float and never prints in scientific notation.
@@ -109,11 +110,12 @@ export function formatDuration(seconds: number): string {
   return plural(seconds, "second");
 }
 
-/** The delay text with a demo limit, for example "Demo delay: 2 minutes (real: 24 hours)". */
+/** The delay text after the chosen wait: "No wait", "Wait: 1 hour", or the real delay. */
 export function delayText(real: number, limit: number): string {
-  const applied = limit > 0 ? Math.min(real, limit) : real;
+  const applied = appliedDelay(real, limit);
+  if (applied === 0) return "No wait";
   if (applied >= real) return formatDuration(real);
-  return `Demo delay: ${formatDuration(applied).toLowerCase()} (real: ${formatDuration(real).toLowerCase()})`;
+  return `Wait: ${formatDuration(applied).toLowerCase()}`;
 }
 
 /** The unit in "300 USDC per day". */
