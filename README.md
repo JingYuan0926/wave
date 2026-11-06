@@ -680,22 +680,63 @@ risks move. This table lists them.
   are signing keys. Each proof signs one exact transaction. We trust the World ID protocol, the
   configured root publisher and the verifier contract. See the security model.
 
+## Agent wallets and human approval — built, not tested
+
+The user's main WAVE wallet is the master of separate agent wallets. Each
+agent receives a spending limit per transfer and per day. The owner can
+revoke access.
+
+Agents operate automatically within those permissions. When an action
+requires the owner, WAVE pauses the request and uses World ID Agent Pass
+to request fresh human authentication.
+
+Our backend validates the result and checks that it matches the identity
+previously linked to the owner. WAVE then shows the exact action for
+explicit approval, including the recipient, token and amount.
+
+The approved action still goes through the wallet's onchain authorization
+and policy checks. Agent Pass authentication alone cannot move funds or
+override spending limits and delays.
+
+Denied, cancelled, expired or invalid requests remain blocked. Changes
+to the requested action require a new approval.
+
+Agent Pass is a separate integration from the World ID 3.0 proof used by
+our frame validator. Its authentication result is not automatically an
+EIP-8141 transaction authorization.
+
+
+
 ## Demo (3 minutes)
 
-> **Demo-only settings:** adding a method takes 48 hours, so the demo uses an account whose
-> passkey was enrolled before the demo. The demo account also uses shortened delays of 2 minutes.
-> The real delays are 24 hours to 7 days.
+> **Demo-only settings:** adding a method takes the full delay, so the demo uses an account whose
+> passkey was enrolled before the demo. The demo account caps every delay at 2 minutes. The
+> address commits to that cap. The real delays are 24 hours to 7 days.
 
 1. Show an account created with World ID only. Show that no seed phrase and no EOA key exist.
 2. Send a small transfer, approved in World App.
-3. Switch to the account with the pre-enrolled device-bound passkey. Show its rule: Face ID under
-   100 USDC, World ID from 100 USDC.
+3. Switch to the account with the pre-enrolled passkey. Show its rule: Face ID under 100 USDC,
+   marked small, and World ID from 100 USDC.
 4. Send 50 USDC with Face ID. It goes through at once.
 5. Try 150 USDC with Face ID. **It is rejected.** Approve the same transfer with World ID.
-6. Use a "stolen" passkey to call `installModule` directly. **It is rejected at once.**
+6. In Settings, open the security demos. Use a "stolen" passkey to call `installModule` directly.
+   **It is rejected at once.**
 7. Approve a sensitive change with World ID. It enters the delay queue.
 8. Cancel it with the passkey.
 9. Open the admitted transaction on the devnet explorer.
+
+**Demo notes:**
+
+- **Face ID and Touch ID are likely synced passkeys.** They approve small tiers only. So mark the
+  "under 100 USDC" tier as small, or the transfer fails with `SyncedNotAllowed`.
+- The demo rule needs no device-bound passkey. A device-bound passkey needs a security key.
+- Check the label in Settings before the demo. It says "Synced passkey" or "Device-bound passkey".
+- "USDC" in the demo is Test USDC (`tUSDC`). Say so.
+- If the demo uses the test identity, the app shows "Test identity. Not a real World ID." Say so.
+- The first send of a new root waits for one slot, about 6 seconds. The sidecar bundles every 10
+  seconds. So allow about 20 seconds for a transaction.
+- A new contract deployment breaks old wallets in the browser (`ACCOUNT_MISMATCH`). Clear the site
+  data for the page to recover.
 
 ## Prize tracks
 
