@@ -6,6 +6,9 @@ import {
   type Address,
   type AgentCheckpointRequest,
   type AgentCheckpointResponse,
+  type AgentConfirmTokenResponse,
+  type AgentDecisionRequest,
+  type AgentOperationView,
   type AgentSpendRequest,
   type AgentSpendResponse,
   type AgentsResponse,
@@ -170,8 +173,17 @@ export const api = {
   agentCheckpoint: (body: AgentCheckpointRequest) =>
     realRequest<AgentCheckpointResponse>("POST", API_ROUTES.agentCheckpoint, body),
 
-  agentPassApprove: (operationId: string) =>
-    realRequest<AgentPassStartResponse>("POST", API_ROUTES.agentPassStart, { operationId }),
+  agentPassDevice: (operationId: string) =>
+    realRequest<AgentOperationView>("POST", API_ROUTES.agentPassDevice, { operationId }),
+
+  agentConfirmToken: (operationId: string) =>
+    realRequest<AgentConfirmTokenResponse>("POST", API_ROUTES.agentConfirmToken, { operationId }),
+
+  agentDecision: (body: AgentDecisionRequest) =>
+    realRequest<AgentOperationView>("POST", API_ROUTES.agentDecision, body),
+
+  agentUseWithClaude: (agent: Address) =>
+    realRequest<{ agent: Address }>("POST", API_ROUTES.mcpAgent, { agent }),
 
   agentPassStart: (wallet: Address) =>
     realRequest<AgentPassStartResponse>("POST", API_ROUTES.agentPassStart, {

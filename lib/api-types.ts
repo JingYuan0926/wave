@@ -49,6 +49,12 @@ export const API_ROUTES = {
   agents: "/api/agents",
   agentSpend: "/api/agents/spend",
   agentCheckpoint: "/api/agents/checkpoint",
+  agentOperation: "/api/agents/operation",
+  agentDecision: "/api/agents/decision",
+  agentConfirmToken: "/api/agents/confirm-token",
+  mcpAgent: "/api/mcp/agent",
+  mcpSend: "/api/mcp/send",
+  agentPassDevice: "/api/agent-pass/device",
   agentPassStart: "/api/agent-pass/start",
   agentPassStatus: "/api/agent-pass/status",
 } as const;
@@ -579,7 +585,8 @@ export type ActivityResponse = {
   items: ActivityItem[];
 };
 
-// World ID Agent Pass: POST /api/agent-pass/start, GET /api/agent-pass/status?id=
+// World ID Agent Pass: POST /api/agent-pass/start, POST /api/agent-pass/device,
+// GET /api/agent-pass/status?id=
 
 export const AGENT_PASS_OPERATION = "demo-send-usdc";
 
@@ -591,13 +598,24 @@ export type AgentPassReason =
   | "unsupported_assurance"
   | "invalid_token"
   | "replayed"
+  | "rate_limited"
   | "provider_error";
 
-export type AgentPassStartRequest =
-  /** The test panel: a mint of 1 test USDC. */
-  | { wallet: Address; operation: typeof AGENT_PASS_OPERATION }
-  /** An action that an agent asked for. The server already holds its exact content. */
-  | { operationId: string };
+/** The test panel: a mint of 1 test USDC, in the browser flow. */
+export type AgentPassStartRequest = { wallet: Address; operation: typeof AGENT_PASS_OPERATION };
+
+/** An action that an agent asked for. The server already holds its exact content. */
+export type AgentPassDeviceRequest = { operationId: string };
+
+/** What a person needs for the device flow. The private device code is never here. */
+export type AgentPassDevice = {
+  userCode: string;
+  verificationUri: string;
+  /** The link for the QR code. Null if World gives no such link. */
+  verificationUriComplete: string | null;
+  /** Unix milliseconds. */
+  expiresAt: number;
+};
 
 export type AgentPassStartResponse = {
   attemptId: string;
@@ -633,16 +651,24 @@ export type AgentPassStatusResponse = {
   attempt: AgentPassAttempt | null;
 };
 
-// Agent wallets: GET /api/agents?master=0x..., POST /api/agents/spend, POST /api/agents/checkpoint
+// Agent wallets: GET /api/agents?master=0x..., POST /api/agents/spend, POST /api/agents/checkpoint,
+// GET /api/agents/operation?id=, POST /api/agents/decision, POST /api/agents/confirm-token
 
 /** What the server does with a request from an agent. */
 export type AgentOperationStatus =
-  /** Nothing ran. A human must approve with Agent Pass. */
+  /** Nothing ran. A human must pass Agent Pass. */
   | "needs-approval"
+  /** World ID proved the person. World showed no action, so the person must confirm it in WAVE. */
+  | "needs-confirmation"
   /** The approval is used. The server sends the transaction now. */
   | "sending"
   | "done"
+  /** The action did not run. */
   | "failed"
+  /** The owner said no. The action did not run. */
+  | "rejected"
+  /** WAVE cannot tell if the transaction ran. The action stays blocked and never sends again. */
+  | "unknown"
   | "expired";
 
 export type AgentOperationView = {
@@ -659,6 +685,10 @@ export type AgentOperationView = {
   refusal: { reason: AgentPassReason; detail: string } | null;
   /** The reason that a send failed after the approval. */
   rejection: Rejection | null;
+  /** The live device attempt, while it waits for World ID. */
+  device: AgentPassDevice | null;
+  /** After World ID: "matched" equals the linked owner. "first" is a person that Confirm will link. */
+  identity: "matched" | "first" | null;
 };
 
 export type AgentView = {
@@ -692,6 +722,8 @@ export type AgentsResponse = {
   next: { address: Address; salt: Hex } | null;
   /** Newest first. */
   operations: AgentOperationView[];
+  /** The agent wallet that the MCP tools use. The "Use with Claude Code" button sets it. */
+  toolAgent: Address | null;
 };
 
 export type AgentSpendRequest = { agent: Address; token: Address; to: Address; amount: BaseUnits };
@@ -701,9 +733,90 @@ export type AgentSpendResponse =
   | { result: "needs-approval"; operation: AgentOperationView }
   | { result: "rejected"; rejection: Rejection };
 
+/** The answer of a person on the /agents page. Only Confirm sends, so only Confirm needs the token. */
+export type AgentDecisionRequest =
+  | { operationId: string; decision: "confirm"; confirmToken: string }
+  | { operationId: string; decision: "reject" };
+
+/** The page asks for this after a click on Confirm. The token works once, for one operation. */
+export type AgentConfirmTokenRequest = { operationId: string };
+
+export type AgentConfirmTokenResponse = { confirmToken: string };
+
 export type AgentCheckpointRequest = { agent: Address; token: Address; askAbove: BaseUnits };
 
 export type AgentCheckpointResponse =
   | { result: "applied" }
   /** A higher amount gives the agent more freedom, so a human must approve it. */
   | { result: "needs-approval"; operation: AgentOperationView };
+
+// The local MCP server for Claude Code: GET and POST /api/mcp/agent, POST /api/mcp/send.
+// It reads an operation with GET /api/agents/operation. No route here can approve a payment.
+
+export type ToolAgentRequest = { agent: Address };
+
+export type ToolAgentState = "active" | "paused" | "revoked" | "wrong-key";
+
+/** All amounts are plain token amounts, such as "12.5". */
+export type ToolTokenView = {
+  symbol: string;
+  isTest: boolean;
+  balance: string;
+  /** The most that one payment can send onchain. Null means that no onchain rule lets the agent spend. */
+  perTransfer: string | null;
+  /** The hard total. Null means that no total applies. */
+  perDay: string | null;
+  /** What the total still allows. Null means that no total applies. */
+  leftToday: string | null;
+  /** The agent sends alone up to this amount, which the chain allows. Null means that a human approves each payment. */
+  askAbove: string | null;
+};
+
+export type ToolAgentResponse = {
+  agent: Address;
+  state: ToolAgentState;
+  tokens: ToolTokenView[];
+};
+
+export type ToolSendRequest = {
+  to: string;
+  /** A plain amount, such as "12.5". */
+  amount: string;
+  /** A symbol. The default is tUSDC. */
+  token?: string;
+  /** The same text means the same payment, so a retry cannot pay twice. */
+  clientRef?: string;
+};
+
+export type ToolSendResponse = {
+  /** The caller's text, or a new one from the server. A retry must pass it again. */
+  clientRef: string;
+  /** Plain text, such as "1 tUSDC to 0x...". */
+  payment: string;
+  /** True if an earlier call with this clientRef did the work. Nothing new ran. */
+  repeat: boolean;
+} & (
+  | {
+      result: "sent";
+      txHash: Hex;
+      explorerUrl: string;
+      /** False if the mempool took it, and WAVE has no receipt yet. */
+      confirmed: boolean;
+    }
+  | {
+      result: "needs_approval";
+      operationId: string;
+      action: DecodedAction;
+      /** Unix milliseconds. */
+      expiresAt: number;
+      /** "world-id": the owner must log in. "confirm": the owner must press Confirm. */
+      step: "world-id" | "confirm";
+      /** The code and the link. Null if a new attempt must start on the /agents page. */
+      device: AgentPassDevice | null;
+      /** Why no code is here, in plain text. */
+      note: string | null;
+    }
+  | { result: "refused"; reason: string }
+  /** WAVE cannot tell if this ran. It stays blocked and never sends again. */
+  | { result: "unknown"; reason: string; txHash: Hex | null; explorerUrl: string | null }
+);

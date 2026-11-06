@@ -15,6 +15,19 @@ export type SendShape =
 export type ShapeTier = { upTo: bigint; cap: bigint; delay: number; period: number; methods: number; small: boolean }
 
 /**
+ * What an agent can send alone today. `askAbove` is the amount on the server. The chain refuses a
+ * payment above its rule, so a higher stored amount gives the agent nothing. No stored amount means
+ * that a human approves each payment.
+ */
+export function aloneAmount(rule: { upTo: string; cap: string }, askAbove: string | null): bigint {
+  const upTo = BigInt(rule.upTo)
+  const cap = BigInt(rule.cap)
+  const chain = cap > 0n && cap < upTo ? cap : upTo
+  const ask = BigInt(askAbove ?? 0)
+  return ask < chain ? ask : chain
+}
+
+/**
  * The rule of a shape. The owner method is in each step, so it can always approve. The owner
  * method cannot be removed, and the other methods can. So a large send always has an approver. The
  * last step has no upper amount. The daily limit is not in a step: it is one hard total for the
