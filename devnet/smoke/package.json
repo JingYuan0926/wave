@@ -1,0 +1,9 @@
+{
+  "name": "wave-devnet-smoke",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@forshtat/hegota-support": "0.0.1",
+    "viem": "2.57.11"
+  }
+}
