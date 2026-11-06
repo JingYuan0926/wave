@@ -59,15 +59,49 @@ and cancel rules. "Verified Execution" does not mean a separate cryptographic pr
 | [EIP-8141](https://eips.ethereum.org/EIPS/eip-8141) Frame transactions | Native account abstraction. The account's own code decides if a transaction is valid, in a `VERIFY` frame, and calls `APPROVE`. |
 | [ERC-8286](https://eips.ethereum.org/EIPS/eip-8286) Modular accounts for frame transactions | ERC-7579 "frame validator" modules (module type `11`). We write one validator per method. |
 | [EIP-8250](https://eips.ethereum.org/EIPS/eip-8250) Keyed nonces | Independent nonce domains. **Our account's convention**, taken from ERC-8286 and its playground: `nonce_keys[0]` holds the validator address. The account reads it with `TXPARAM(0x10)`. |
-| [EIP-8272](https://eips.ethereum.org/EIPS/eip-8272) Recent roots | Proves that a root was recently published under a given source. It does **not** prove that the root is authentic. |
+| [EIP-8272](https://eips.ethereum.org/EIPS/eip-8272) Recent roots | Proves that a root was recently published under a given source. On this chain it is an **envelope field**, not a `VERIFY` frame. It does **not** prove that the root is authentic. |
 | World ID 3.0 onchain proofs | A zero-knowledge proof that the account's owner, a unique human, approved this exact transaction. |
+
+### Chain facts
+
+Chain 1337 runs an early revision of these EIPs. Its addresses differ from the EIP texts. The
+addresses in the EIP texts have no code here.
+
+| Contract | Address on chain 1337 |
+|---|---|
+| Nonce manager (EIP-8250) | `0x0000000000000000000000000000000000008250` |
+| Recent roots (EIP-8272) | `0x0000000000000000000000000000000000008272` |
+| Expiry verifier (EIP-8141) | `0x0000000000000000000000000000000000008141` |
+
+The frame transaction has this wire format:
+
+```
+0x06 || rlp([chainId, nonceKeys, nonceSeq, sender, frames, signatures,
+             [maxPriorityFee, maxFee, maxBlobFee], blobHashes, recentRootReferences])
+```
+
+`deploy.ts` writes the WAVE contract addresses to `contracts/deployments/local.json`. Each deploy
+makes new addresses.
 
 ### World ID version
 
-We target **World ID 3.0 (legacy) onchain proofs**:
-`verifyProof(root, groupId = 1, signalHash, nullifierHash, externalNullifierHash, uint256[8] proof)`.
+We target **World ID 3.0 (legacy) onchain proofs**. We deploy World's Groth16 verifier on our
+chain and call it directly:
 
-- The onchain 3.0 path is Orb-only (`groupId = 1`).
+```solidity
+verifyProof(uint256[8] proof, uint256[4] input)
+// input = [root, nullifierHash, signalHash, externalNullifierHash]
+```
+
+- The source is `src/SemaphoreVerifier.sol` in `worldcoin/world-id-contracts`.
+- The function returns nothing. It reverts on a bad proof, so the validator uses `try/catch`.
+- It costs about 208k gas. It calls the precompiles `0x06`, `0x07` and `0x08`.
+- The onchain 3.0 path is Orb-only. IDKit's `orbLegacy` preset asks for that credential.
+- This verifier has no `groupId` argument. The published root selects the tree.
+- **Signal:** `signalHash = uint256(keccak256(abi.encodePacked(sigHash))) >> 8`. The app passes
+  `orbLegacy({ signal: sigHashHex })` with the `0x` prefix, and sets `allow_legacy_proofs: true`.
+- **External nullifier:** `hashToField(packed(hashToField(app_id), action))`. The action is
+  `wave-approve`.
 - World ID 4.0 uses a different proof and a different verifier interface. This design does not
   use 4.0.
 - The design compares one fixed owner nullifier, scoped to our app and action. That matches 3.0
@@ -75,7 +109,8 @@ We target **World ID 3.0 (legacy) onchain proofs**:
 - World's Mumbai prize page notes mocked proofs, but only under the Agent Pass track. That note
   does not cover IDKit, and it does not confirm that 3.0 test proofs are available.
 - **We must show that an official test credential produces a transaction-bound 3.0 proof, and
-  that our verifier accepts it on the devnet.** Until then, this part is unproven.
+  that our verifier accepts it on the devnet.** Until then, this part is unproven. See
+  [World ID modes](#world-id-modes).
 
 ### Account creation
 
