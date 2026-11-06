@@ -874,18 +874,123 @@ The server publishes roots with a plain transaction, so `RootPublisher.sol` does
 
 ## Running it
 
-1. Install the EIP-8141 Solidity fork
-   [v0.8.36-eip8141.1](https://github.com/chiranjeev13/solidity/releases/tag/v0.8.36-eip8141.1).
-   A stock `solc` does not know the EIP-8141 opcodes.
-2. Run `npm install`.
-3. Set the devnet values in `.env`:
-   - execution RPC `https://altmempool.forshtat.com`
-   - mempool RPC `https://altmempool.forshtat.com/rpc`
-   - chain ID `1337`
-4. Run `npm run deploy` to deploy the verifier, the validators, the account and the factory.
-5. Run `npm run send` to simulate a frame transaction. Set `submit` to send it.
+You need Node.js, and Docker or OrbStack. These steps assume macOS on Apple silicon, because
+`fetch-solc` downloads the macOS arm64 build. The first start of the stack downloads about 2 GB.
 
-**TODO:** update these steps when the code is final.
+1. Run `npm install`.
+2. Build the contracts. A stock `solc` does not know the EIP-8141 opcodes, so `fetch-solc` gets
+   the fork [v0.8.38-eip8141.0](https://github.com/chiranjeev13/solidity/releases/tag/v0.8.38-eip8141.0).
+
+   ```sh
+   cd contracts
+   npm install
+   npm run fetch-solc
+   npm run compile
+   cd ..
+   ```
+
+3. Run `devnet/up.sh`. A first start takes about 8 minutes. It returns when frame transactions
+   work.
+4. Run `npm run deploy` in `contracts/`. This writes `contracts/deployments/local.json`.
+5. Run `scripts/fetch-zk.sh` once. The test identity needs these circuit files.
+6. Run `cp -n .env.example .env.local`. The `-n` flag keeps an existing file. With the World ID
+   values blank, the app uses the test identity.
+7. Run `npx next dev -p 3000`.
+8. Open `http://localhost:3000`.
+
+To stop:
+
+1. Press Ctrl-C in the terminal of the web server.
+2. Leave the stack running, or run `devnet/down.sh`. **`down.sh` deletes the chain.** After that,
+   run `devnet/up.sh` and `npm run deploy` in `contracts/` again.
+
+After the Mac sleeps, run `devnet/up.sh`. It keeps the chain.
+
+### The local devnet
+
+`devnet/` runs ethrex, two Lighthouse beacon nodes, one validator client, the sidecar and the
+explorer on one machine. All ports bind to `127.0.0.1`. The chain and all keys are local and hold
+no real value. [devnet/README.md](devnet/README.md) has the full detail.
+
+| Service | Address |
+|---|---|
+| ethrex RPC, chain 1337 | `http://localhost:8545` |
+| Sidecar (alternative mempool) | `http://localhost:14337/rpc` |
+| Explorer | `http://localhost:5173`, one transaction at `/tx/<hash>?node=http://localhost:14337/rpc` |
+
+We change the stock sidecar in two ways:
+
+1. **Verify gas budget.** A one-line patch reads `MAX_VERIFY_GAS` from an env value. We set it to
+   2,500,000. The stock limit is 100k for all senders. This raises a resource limit only, and all
+   opcode and storage rules still apply. The alt-mempool team (Alex Forshtat) accepted this change.
+2. **Precompile list.** `config/sidecar.json` lists `0x01` to `0x11` and `0x100`. This is a
+   configuration value, not a code change. Rule COD-010 rejects a call to an address with no code,
+   and the stock list is empty. Rule CALLING-040 of ERC-8421 already allows these precompiles.
+
+A local sidecar is accepted for judging.
+
+### The public devnet
+
+`WAVE_NETWORK=devnet` in `.env.local` selects the public devnet. **We have not run this.**
+`contracts/deployments/devnet.json` does not exist yet, and the switch needs a funded `WAVE_DEV_KEY`.
+
+When we last checked, the public chain had stopped at block 408262 and its faucet was empty. The
+public sidecars reported an empty precompile list. So they should reject our validators.
+
+### World ID modes
+
+**WAVE can run with no Orb and no phone.** The first two modes below do this. Only the second one
+is a World product.
+
+| Mode | How to select it | Who makes the proof | Status |
+|---|---|---|---|
+| **Test identity** (`dev`) | Leave any of the three World ID values blank | The WAVE server, with the World simulator's circuit files | All tests used this mode |
+| **World simulator** (`idkit`, staging) | Set the three values and `NEXT_PUBLIC_WORLD_ENV=staging` | [simulator.worldcoin.org](https://simulator.worldcoin.org). No Orb and no phone. | No scan has run yet |
+| **Real World App** (`idkit`, production) | Set the three values and `NEXT_PUBLIC_WORLD_ENV=production` | World App on a phone, with Orb verification | No scan has run yet |
+
+The three values are `NEXT_PUBLIC_WORLD_APP_ID`, `NEXT_PUBLIC_RP_ID` and `RP_SIGNING_KEY`. They
+come from the [World Developer Portal](https://developer.world.org). The action is `wave-approve`.
+
+- **The test identity is not a World ID.** The browser holds random secrets in localStorage. The
+  server proves over a one-leaf tree and publishes that root. The proofs are real Groth16, and
+  the onchain verifier checks them. The app shows "Test identity. Not a real World ID."
+- This proves the pipeline. It does not prove that a World ID works.
+- `idkit` mode shows World's QR. The creation scan goes to the Portal, at
+  `POST https://developer.world.org/api/v4/verify/{rp_id}`. A transaction scan signs `sig_hash`,
+  and the contract verifies it.
+- The app also accepts `NEXT_PUBLIC_WORLD_ENV=sandbox`. We do not know where the sandbox root
+  lives, so the app reads the staging root. We have not tested it.
+- The app ID sets the external nullifier. A new app ID gives each owner a new wallet address.
+- The build inlines the two `NEXT_PUBLIC_` values. After a change, restart `next dev`, or run
+  `next build` again before `next start`.
+- `NEXT_PUBLIC_WAVE_MOCK=1` is a third option, for UI work only. It uses no chain and no proofs.
+
+### Test results
+
+These are the last runs, on 2026-11-06, on the local stack.
+
+| Check | Command | Result |
+|---|---|---|
+| Policy unit tests | `forge test` in `contracts/` | 35 passed, 0 failed |
+| Checks with no chain | `npx tsx scripts/unit.ts` | 22 passed, 0 failed |
+| End-to-end cases on the chain | `npx tsx scripts/e2e.ts` | 15 of 15 passed, with the gas sponsor. Test identity, software authenticator. |
+| API routes | `SMOKE_FULL=1 npx tsx scripts/api-smoke.ts` | 48 passed, 0 failed, with the gas sponsor |
+| Sponsor limits | `SMOKE_BUDGET=1 npx tsx scripts/api-smoke.ts`, server with `WAVE_SPONSOR_DAILY_TX=1` | 8 passed, 0 failed |
+| Browser journey, synced passkey | Chromium at 1280 px | 44 of 44 steps, with the gas sponsor. Test identity, virtual authenticator. |
+| Browser journey, device-bound passkey | Chromium at 390 px | 55 of 55 steps, before the gas sponsor. Test identity, virtual authenticator. |
+| Lint and build | `npm run lint`, `npm run build` | Both exit 0 |
+
+`scripts/e2e.ts` takes about 15 minutes, because it waits for real blocks and delays.
+`scripts/api-smoke.ts` needs a server in test identity mode with `WAVE_DEMO_DELAY=20`.
+
+**Not run:**
+
+- a real World ID scan
+- a real security key, Face ID or Touch ID
+- a real chain restart
+- a root republish after 8000 slots
+- a transaction that waits past 45 seconds
+- a full fallback change of the root source
 
 ## Open questions
 
