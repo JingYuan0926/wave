@@ -19,8 +19,8 @@ export type UnixSeconds = number;
 /** The address that stands for native ETH in rules and balances. */
 export const ETH_TOKEN: Address = "0x0000000000000000000000000000000000000000";
 
-/** World ID is bit 0 of a tier's method mask. Other bits come from `methodBitOf`. */
-export const WORLD_METHOD_MASK = 1;
+/** The owner method is bit 0 of a tier's method mask. Other bits come from `methodBitOf`. */
+export const OWNER_METHOD_MASK = 1;
 export const PASSKEY_SLOTS = [1, 2, 3] as const;
 export type PasskeySlot = (typeof PASSKEY_SLOTS)[number];
 
@@ -36,12 +36,14 @@ export const API_ROUTES = {
   info: "/api/info",
   account: "/api/account",
   faucet: "/api/faucet",
+  runScheduled: "/api/tx/run-scheduled",
   rootPublish: "/api/root/publish",
   txPrepare: "/api/tx/prepare",
   txSend: "/api/tx/send",
   txStatus: "/api/tx/status",
   worldRpContext: "/api/world/rp-context",
   worldVerify: "/api/world/verify",
+  walletPlan: "/api/wallet/plan",
   worldDevProof: "/api/world/dev-proof",
   activity: "/api/activity",
   agents: "/api/agents",
@@ -107,10 +109,23 @@ export type TierView = Tier & {
   periodEndsAt: UnixSeconds | null;
 };
 
+/** The hard daily total of one token. All methods and all tiers share it. */
+export type DailyView = {
+  limit: BaseUnits;
+  /** Amount counted in the current 24 hours. */
+  spent: BaseUnits;
+  /** Amount that can still go out in the current 24 hours. */
+  left: BaseUnits;
+  /** The end of the current 24 hours. Null when no send started a window. */
+  resetsAt: UnixSeconds | null;
+};
+
 export type TokenRules = {
   token: Address;
-  /** Empty means the default rule: World ID only, no delay. */
+  /** Empty means the default rule: the owner method only, no delay. */
   tiers: TierView[];
+  /** Null means no daily limit. */
+  daily: DailyView | null;
 };
 
 export type PasskeyBackup = "synced" | "device-bound";
@@ -122,6 +137,8 @@ export type MethodView = {
   mask: number;
   /** Set for passkeys only. */
   backup: PasskeyBackup | null;
+  /** True for the owner method. It approves big sends and changes to the wallet. */
+  owner: boolean;
 };
 
 // Scheduled actions
@@ -161,12 +178,12 @@ export type PendingAction = {
   realDelay: number;
   /** The delay that applies to this account, after the demo delay. */
   appliedDelay: number;
-  /** "any" means any enrolled method. "world" means World ID only. */
-  cancelBy: "any" | "world";
+  /** "any" means any enrolled method. "owner" means the owner method only. */
+  cancelBy: "any" | "owner";
 };
 
 export type RecoveryView = {
-  /** Enrolled methods other than World ID. */
+  /** Enrolled methods other than the owner method. */
   otherMethods: number;
   /** Two distinct other methods can run a recovery. */
   available: boolean;
@@ -296,10 +313,16 @@ export type AccountResponse = {
   deployed: boolean;
   balances: TokenBalance[];
   configVersion: string;
-  /** Seconds. 0 means real delays. */
+  /** The clone value: seconds, 0 for real delays, or NO_WAIT. Use `waitSeconds` for text. */
   demoDelay: number;
-  /** The owner on the chain. Null until the wallet deploys. A recovery can change it. */
+  /** The wait that the owner chose, in seconds. 0 is no wait. Null means real delays. */
+  waitSeconds: number | null;
+  /** The World ID owner on the chain. Null for a passkey owner, and until the wallet deploys. */
   ownerNullifierHash: Hex | null;
+  /** The owner method of this wallet. */
+  owner: MethodRef;
+  /** The public key x of an owner passkey. A recovery can change it. Null for World ID. */
+  ownerKeyX: Hex | null;
   methods: MethodView[];
   rules: TokenRules[];
   pending: PendingAction[];
@@ -307,6 +330,13 @@ export type AccountResponse = {
   /** Null when the wallet pays its own gas. */
   sponsor: SponsorView | null;
 };
+
+// POST /api/tx/run-scheduled. Local network only. It needs no approval: the owner approved the
+// action when it was queued, and the contract lets anyone run it after the delay.
+
+export type RunScheduledRequest = { account: Address; actionId: Hex };
+
+export type RunScheduledResponse = { txHash: Hex };
 
 // POST /api/faucet
 
@@ -337,6 +367,8 @@ export type RootPublishResponse = {
 
 export type RecoveryChange =
   | { kind: "owner"; nullifierHash: Hex }
+  /** The owner method is a passkey. The new passkey replaces it. */
+  | { kind: "owner-key"; publicKey: { x: Hex; y: Hex }; backupEligible: boolean }
   | { kind: "root-source"; sourceId: Hex };
 
 /** One token and its tiers, for the first setup of an agent wallet. */
@@ -344,14 +376,14 @@ export type AgentRule = { token: Address; tiers: Tier[] };
 
 /** What the main wallet does to one of its agent wallets. */
 export type AgentAdminOp =
-  /** World ID, no delay. The server sets the agent key and deploys the wallet first. */
+  /** The owner method, no delay. The server sets the agent key and deploys the wallet first. */
   | { kind: "create"; salt: Hex; rules: AgentRule[] }
   /** Any enrolled method, at once. */
   | { kind: "revoke" }
   | { kind: "pause" }
   | { kind: "tighten"; token: Address; tiers: Tier[] }
   | { kind: "withdraw"; token: Address; amount: BaseUnits }
-  /** World ID. These go through the 48 hour queue. */
+  /** The owner method. These go through the 48 hour queue. */
   | { kind: "unpause" }
   | { kind: "set-tiers"; token: Address; tiers: Tier[] }
   | { kind: "set-key" };
@@ -366,10 +398,13 @@ export type TxAction =
       backupEligible: boolean;
     }
   | { kind: "remove-passkey"; slot: PasskeySlot }
-  /** Stricter tiers. Any enrolled method. It applies at once. */
-  | { kind: "tighten"; token: Address; tiers: Tier[] }
-  /** Looser tiers. World ID. The change goes through the 48 hour queue. */
-  | { kind: "set-rules"; token: Address; tiers: Tier[] }
+  /**
+   * Stricter tiers and a daily limit that is new, the same or lower. Any enrolled method. It applies
+   * at once. `dailyLimit` is the whole value, and "0" means no limit.
+   */
+  | { kind: "tighten"; token: Address; tiers: Tier[]; dailyLimit: BaseUnits }
+  /** Looser rules. The owner method. The change goes through the 48 hour queue. "0" removes the limit. */
+  | { kind: "set-rules"; token: Address; tiers: Tier[]; dailyLimit: BaseUnits }
   | { kind: "cancel"; actionId: Hex }
   | { kind: "execute-scheduled"; actionId: Hex }
   | { kind: "approve-recovery"; actionId: Hex }
@@ -384,7 +419,7 @@ export type TxAction =
 export type TxPrepareRequest = {
   account: Address;
   /** Required while the account has no code. The first tx deploys it. */
-  deployment?: { ownerNullifierHash: Hex; salt: Hex };
+  deployment?: WalletPlan;
   action: TxAction;
   method: MethodRef;
   /** The last `merkle_root` seen. World ID transactions reference this root. */
@@ -408,6 +443,10 @@ export type TxPrepared = {
   deploys: boolean;
   /** True when the gas station pays for this tx. */
   sponsored: boolean;
+  /** True if the wallet has no wait and the app must run this action right after it is approved. */
+  runAtOnce: boolean;
+  /** The action to run. A new `schedule` gets its ID from the send response instead. */
+  runActionId: Hex | null;
 };
 
 export type TxPrepareResponse = TxPrepared | { ok: false; rejection: Rejection };
@@ -421,7 +460,8 @@ export type TxSendRequest = {
 };
 
 export type TxSendResponse =
-  | { ok: true; txHash: Hex; frames: FrameView[] }
+  /** `scheduledId` is set when this transaction queued an action. */
+  | { ok: true; txHash: Hex; frames: FrameView[]; scheduledId?: Hex }
   | { ok: false; rejection: Rejection };
 
 // GET /api/tx/status?hash=0x...
@@ -435,6 +475,50 @@ export type TxStatusResponse = {
   gasUsed: string | null;
   frames: FrameView[];
   rejection: Rejection | null;
+};
+
+// POST /api/wallet/plan
+
+/** A passkey or security key, as the device reported it at enrolment. */
+export type PasskeyFacts = {
+  publicKey: { x: Hex; y: Hex };
+  /** BE at enrolment. True means a synced passkey. */
+  backupEligible: boolean;
+};
+
+/** The ticked method that ranks highest. Rank: World ID, security key, passkey. */
+export type PlanOwner = { kind: "world"; nullifierHash: Hex } | ({ kind: "passkey" } & PasskeyFacts);
+
+/** A ticked method that is not the owner method. It approves sends up to `limit` at once. */
+/** Test scripts set `limit`. The app sets `sends` on the plan instead. */
+export type PlanExtra = PasskeyFacts & { limit?: BaseUnits };
+
+/**
+ * How the wallet approves sends of test tokens. A method is an index: 0 is the owner method, and N is
+ * extra method N. `perDay` is the hard daily total. Null or no value means no daily limit.
+ */
+export type PlanSends =
+  | { kind: "every"; method: number; perDay?: BaseUnits | null }
+  | { kind: "limit"; amount: BaseUnits; perDay: BaseUnits | null; lower: number; upper: number };
+
+/** The waits on the creation screen, in seconds. 0 is no wait. */
+export const WAIT_CHOICES = [0, 5, 10, 15, 60, 300, 3600, 86400, 172800] as const;
+
+/** What the owner ticked at creation. The wallet address commits to all of it. */
+export type WalletPlan = {
+  owner: PlanOwner;
+  extras: PlanExtra[];
+  /** A value from WAIT_CHOICES. Test scripts leave this out, and WAVE_DEMO_DELAY applies. */
+  wait?: number;
+  sends?: PlanSends;
+};
+
+export type WalletPlanResponse = {
+  address: Address;
+  /** Slot 1 for an owner passkey. Null for a World ID owner. */
+  ownerSlot: PasskeySlot | null;
+  /** One slot per extra method, in plan order. */
+  extraSlots: PasskeySlot[];
 };
 
 // POST /api/world/rp-context

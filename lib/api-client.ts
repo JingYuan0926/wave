@@ -14,6 +14,8 @@ import {
   type ApiErrorBody,
   type DevIdentity,
   type FaucetResponse,
+  type RunScheduledRequest,
+  type RunScheduledResponse,
   type Hex,
   type InfoResponse,
   type RootPublishResponse,
@@ -22,6 +24,8 @@ import {
   type TxSendRequest,
   type TxSendResponse,
   type TxStatusResponse,
+  type WalletPlan,
+  type WalletPlanResponse,
   type WorldDevProofResponse,
   type WorldRpContextResponse,
   type WorldVerifyRequest,
@@ -111,11 +115,18 @@ function withQuery(path: string, key: string, value: string): string {
 export const api = {
   info: () => request<InfoResponse>("GET", API_ROUTES.info),
 
-  account: (address: Address) =>
-    request<AccountResponse>("GET", withQuery(API_ROUTES.account, "address", address)),
+  /** The plan lets the server show a wallet that has no code yet. */
+  account: (address: Address, plan?: WalletPlan) =>
+    request<AccountResponse>(
+      "GET",
+      `${withQuery(API_ROUTES.account, "address", address)}${plan ? `&plan=${encodeURIComponent(JSON.stringify(plan))}` : ""}`,
+    ),
 
   activity: (address: Address) =>
     request<ActivityResponse>("GET", withQuery(API_ROUTES.activity, "address", address)),
+
+  runScheduled: (body: RunScheduledRequest) =>
+    request<RunScheduledResponse>("POST", API_ROUTES.runScheduled, body),
 
   faucet: (address: Address) =>
     request<FaucetResponse>("POST", API_ROUTES.faucet, { address }),
@@ -139,6 +150,9 @@ export const api = {
 
   worldVerify: (body: WorldVerifyRequest) =>
     request<WorldVerifyResponse>("POST", API_ROUTES.worldVerify, body),
+
+  walletPlan: (plan: WalletPlan) =>
+    request<WalletPlanResponse>("POST", API_ROUTES.walletPlan, plan),
 
   worldDevProof: (identity: DevIdentity, signal: string) =>
     request<WorldDevProofResponse>("POST", API_ROUTES.worldDevProof, {
