@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "WAVE Wallet",
+  "version": "0.1.0",
+  "description": "A wallet you approve with World ID. No seed phrase, no private key.",
+  "action": { "default_title": "Open WAVE" },
+  "side_panel": { "default_path": "index.html" },
+  "background": { "service_worker": "background.js" },
+  "permissions": ["sidePanel"]
+}
