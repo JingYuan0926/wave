@@ -22,7 +22,7 @@ import { cn } from "@/lib/ui/cn";
 import { findPasskey, getPasskey, recoveryIdentityOf, setRootHint } from "@/lib/ui/local";
 import { signWithPasskey } from "@/lib/ui/passkey";
 import { explainRejection } from "@/lib/ui/rejections";
-import { methodDetail, methodLabel, sameMethod, type MethodChoice } from "@/lib/ui/rules";
+import { methodDetail, methodLabel, nameFor, sameMethod, type MethodChoice } from "@/lib/ui/rules";
 import { sameRoot } from "@/lib/ui/world";
 import { Badge, Button, CopyHex, Notice, Skeleton, focusRing } from "./ui";
 import { useWallet } from "./wallet-provider";
@@ -53,7 +53,17 @@ type Stage =
   | { name: "sending"; prepared: TxPrepared }
   | { name: "rejected"; rejection: Rejection; prepared: TxPrepared | null }
   | { name: "failed"; message: string }
-  | { name: "done"; prepared: TxPrepared; txHash: Hex; frames: FrameView[] };
+  | { name: "running"; prepared: TxPrepared }
+  | {
+      name: "done";
+      prepared: TxPrepared;
+      txHash: Hex;
+      frames: FrameView[];
+      /** The transaction that ran the action, on a wallet with no wait. */
+      ranHash?: Hex;
+      /** The owner approved, but the server could not run the action. */
+      runError?: string;
+    };
 
 export function MethodPicker({
   choices,
@@ -66,33 +76,31 @@ export function MethodPicker({
   return (
     <ul className="flex flex-col gap-2">
       {choices.map(({ view, allowed, reason }) => {
-        // A passkey can sign only in the browser that holds its credential.
-        const elsewhere =
-          view.ref.kind === "passkey" &&
-          wallet !== null &&
-          local !== null &&
-          findPasskey(local, wallet.address, view.ref.slot) === null;
+        const held =
+          view.ref.kind === "passkey" && wallet && local ? findPasskey(local, wallet.address, view.ref.slot) : null;
+        // A browser can lose the stored ID, for example after Start over. The device still holds
+        // the passkey, so the device picker finds it. The contract rejects a wrong passkey.
+        const noStoredId = view.ref.kind === "passkey" && wallet !== null && local !== null && held === null;
         return (
           <li key={view.validator}>
             <button
               type="button"
-              disabled={elsewhere}
               onClick={() => onPick(view.ref)}
-              className={cn(
-                `flex min-h-11 w-full items-center justify-between gap-3 rounded-xl border border-border px-3 py-2 text-start text-sm ${focusRing}`,
-                elsewhere ? "cursor-not-allowed opacity-60" : "hover:bg-muted",
-              )}
+              className={`flex min-h-11 w-full items-center justify-between gap-3 rounded-xl border border-border px-3 py-2 text-start text-sm hover:bg-muted ${focusRing}`}
             >
               <span className="min-w-0">
-                <span className="block font-medium">{methodDetail(view, info?.world)}</span>
-                {elsewhere ? (
-                  <span className="block text-muted-foreground">Use the browser that holds this passkey.</span>
-                ) : reason ? (
-                  <span className="block text-muted-foreground">{reason}</span>
+                <span className="block font-medium">
+                  {methodDetail(view, info?.world, nameFor(view.ref, held, info?.world))}
+                </span>
+                {reason ? <span className="block text-muted-foreground">{reason}</span> : null}
+                {noStoredId && allowed ? (
+                  <span className="block text-muted-foreground">
+                    Your device will ask you to pick this passkey.
+                  </span>
                 ) : null}
               </span>
-              <Badge tone={!elsewhere && allowed ? "success" : "warning"} className="shrink-0">
-                {elsewhere ? "Not on this browser" : allowed ? "Can approve" : "Will be rejected"}
+              <Badge tone={allowed ? "success" : "warning"} className="shrink-0">
+                {allowed ? "Can approve" : "Will be rejected"}
               </Badge>
             </button>
           </li>
@@ -173,10 +181,10 @@ function Review({ prepared, world }: { prepared: TxPrepared; world: InfoResponse
   );
 }
 
-function ExplorerLink({ info, hash }: { info: InfoResponse; hash: Hex }) {
+function ExplorerLink({ info, hash, label = "Transaction hash" }: { info: InfoResponse; hash: Hex; label?: string }) {
   return (
     <div className="rounded-xl bg-muted px-3 py-2">
-      <p className="text-xs text-muted-foreground">Transaction hash</p>
+      <p className="text-xs text-muted-foreground">{label}</p>
       <p className="font-mono text-xs break-all">{hash}</p>
       <div className="flex items-center gap-3">
         <CopyHex value={hash} />
@@ -255,6 +263,26 @@ function RejectionView({
   );
 }
 
+function PasskeyApprove({ prepared, onApprove }: { prepared: TxPrepared; onApprove: () => void }) {
+  const { method } = prepared;
+  const { wallet, local } = useWallet();
+  const held = method.kind === "passkey" && wallet && local ? findPasskey(local, wallet.address, method.slot) : null;
+  const isKey = held?.name === "security-key";
+  return (
+    <div className="flex flex-col gap-2">
+      <Button onClick={onApprove}>
+        <Fingerprint aria-hidden="true" className="size-4" />
+        {isKey ? "Approve with security key" : "Approve with Face ID / Touch ID"}
+      </Button>
+      <p className="text-center text-sm text-muted-foreground">
+        {isKey
+          ? "The chain checks the signature from your key."
+          : "Face ID and Touch ID only unlock the passkey. The chain checks the signature."}
+      </p>
+    </div>
+  );
+}
+
 /** The one path for every transaction: pick, prepare, review, sign, send, result. */
 export function ApproveFlow({
   request,
@@ -279,7 +307,7 @@ export function ApproveFlow({
           account: wallet.address,
           deployment: account.deployed
             ? undefined
-            : { ownerNullifierHash: wallet.ownerNullifierHash, salt: wallet.salt },
+            : wallet.plan,
           action: request.action,
           method,
           rootHint: rootHint ?? wallet.rootHint ?? undefined,
@@ -339,7 +367,21 @@ export function ApproveFlow({
         setStage({ name: "rejected", rejection: sent.rejection, prepared });
         return;
       }
-      setStage({ name: "done", prepared, txHash: sent.txHash, frames: sent.frames });
+      const done = { name: "done", prepared, txHash: sent.txHash, frames: sent.frames } as const;
+      // A wallet with no wait shows no queue step: this one approval also runs the action.
+      const actionId = prepared.runAtOnce ? (prepared.runActionId ?? sent.scheduledId) : undefined;
+      if (actionId && wallet) {
+        setStage({ name: "running", prepared });
+        try {
+          const { txHash: ranHash } = await api.runScheduled({ account: wallet.address, actionId });
+          setStage({ ...done, ranHash });
+        } catch (cause) {
+          const runError = cause instanceof Error ? cause.message : "WAVE could not run this action.";
+          setStage({ ...done, runError });
+        }
+      } else {
+        setStage(done);
+      }
       await refresh();
       onDone?.();
     } catch (cause) {
@@ -373,12 +415,8 @@ export function ApproveFlow({
     const { method } = prepared;
     if (method.kind !== "passkey" || !wallet) return;
     const passkey = getPasskey(wallet.address, method.slot);
-    if (!passkey) {
-      setStage({ name: "failed", message: "This browser does not hold that passkey." });
-      return;
-    }
     try {
-      const data = await signWithPasskey(prepared.sigHash, passkey.credentialId);
+      const data = await signWithPasskey(prepared.sigHash, passkey?.credentialId);
       await send(prepared, { kind: "passkey", slot: method.slot, data });
     } catch (cause) {
       setStage({
@@ -405,8 +443,10 @@ export function ApproveFlow({
       return (
         <div className="flex flex-col gap-3" role="status" aria-label="Building the transaction">
           <p className="text-sm text-muted-foreground">
-            Building the transaction. The first World ID transaction publishes a root to the chain,
-            so it can take about 20 seconds.
+            Building the transaction.
+            {account.methods.some((view) => view.ref.kind === "world")
+              ? " The first World ID transaction publishes a root to the chain, so it can take about 20 seconds."
+              : ""}
           </p>
           <Skeleton className="h-16" />
           <Skeleton className="h-24" />
@@ -427,15 +467,7 @@ export function ApproveFlow({
               onProof={(proof) => onWorldProof(prepared, proof)}
             />
           ) : (
-            <div className="flex flex-col gap-2">
-              <Button onClick={() => void onPasskey(prepared)}>
-                <Fingerprint aria-hidden="true" className="size-4" />
-                Approve with Face ID / Touch ID
-              </Button>
-              <p className="text-center text-sm text-muted-foreground">
-                Face ID and Touch ID only unlock the passkey. The chain checks the signature.
-              </p>
-            </div>
+            <PasskeyApprove prepared={prepared} onApprove={() => void onPasskey(prepared)} />
           )}
           {backToPick ? (
             <Button variant="ghost" onClick={backToPick}>
@@ -454,6 +486,15 @@ export function ApproveFlow({
             10 seconds.
           </p>
           <FrameList frames={stage.prepared.frames} />
+        </div>
+      );
+    case "running":
+      return (
+        <div className="flex flex-col gap-3" role="status">
+          <p className="font-semibold">Applying the change</p>
+          <p className="text-sm text-muted-foreground">
+            This wallet has no wait, so the change runs now. You do not need to approve again.
+          </p>
         </div>
       );
     case "rejected": {
@@ -487,7 +528,9 @@ export function ApproveFlow({
       );
     case "done": {
       // Frames have a status only after the tx is mined.
-      const queued = stage.prepared.route === "schedule" && stage.frames.some((f) => f.status);
+      const applied = stage.ranHash !== undefined;
+      const queued =
+        !applied && stage.prepared.route === "schedule" && stage.frames.some((f) => f.status);
       return (
         <div className="flex flex-col gap-3">
           <div className="flex items-start gap-3">
@@ -496,9 +539,11 @@ export function ApproveFlow({
               <p className="font-semibold">
                 {request.expectRejection
                   ? "The chain accepted this. It should not."
-                  : queued
-                    ? "Queued"
-                    : "Sent"}
+                  : applied
+                    ? "Applied"
+                    : queued
+                      ? "Queued"
+                      : "Sent"}
               </p>
               <p className="text-sm text-muted-foreground">{stage.prepared.decoded.title}</p>
               {queued ? (
@@ -508,7 +553,13 @@ export function ApproveFlow({
               ) : null}
             </div>
           </div>
-          <ExplorerLink info={info} hash={stage.txHash} />
+          {stage.runError ? (
+            <Notice tone="warning" title="You approved this, but it did not run">
+              Run it from Pending actions on the Wallet page. {stage.runError}
+            </Notice>
+          ) : null}
+          {stage.ranHash ? <ExplorerLink info={info} hash={stage.ranHash} label="Transaction that applied it" /> : null}
+          <ExplorerLink info={info} hash={stage.txHash} label={stage.ranHash ? "Your approval" : undefined} />
           <FrameList frames={stage.frames} />
         </div>
       );

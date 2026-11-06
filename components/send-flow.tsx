@@ -4,13 +4,16 @@ import { useMemo, useState } from "react";
 import { isAddress } from "viem";
 import { ETH_TOKEN, type Address } from "@/lib/api-types";
 import { formatAmount, parseTokenAmount } from "@/lib/ui/format";
-import { ETH_GAS_RESERVE, describeSpend } from "@/lib/ui/rules";
+import { dailyStop, leftToday, liveDaily } from "@/lib/ui/limits";
+import { ETH_GAS_RESERVE, describeSpend, plainName } from "@/lib/ui/rules";
+import { useNow } from "@/lib/ui/use-now";
 import { ApproveFlow, MethodPicker, type ApprovalRequest } from "./approve-flow";
 import { Amount, Button, Field, Notice, SelectField, Sheet } from "./ui";
 import { useWallet } from "./wallet-provider";
 
 export function SendFlow({ onClose, initialTo = "" }: { onClose: () => void; initialTo?: string }) {
-  const { account, info, tokenBy } = useWallet();
+  const { account, info, tokenBy, wallet, local } = useWallet();
+  const now = useNow();
   const [to, setTo] = useState(initialTo);
   const [amountText, setAmountText] = useState("");
   const [tokenAddress, setTokenAddress] = useState<string>(
@@ -36,8 +39,8 @@ export function SendFlow({ onClose, initialTo = "" }: { onClose: () => void; ini
   const rule = useMemo(() => {
     if (!account || !token || amount === null) return null;
     const rules = account.rules.find((r) => r.token === token.address);
-    return describeSpend(rules, amount, account.methods, account.demoDelay);
-  }, [account, token, amount]);
+    return describeSpend(rules, amount, account.methods, (view) => plainName(view, wallet, local, info?.world));
+  }, [account, token, amount, wallet, local, info?.world]);
 
   if (!account || !info) return null;
 
@@ -49,8 +52,10 @@ export function SendFlow({ onClose, initialTo = "" }: { onClose: () => void; ini
     );
   }
 
+  const daily = liveDaily(account.rules.find((r) => r.token === token?.address)?.daily, now);
+  const stop = token && amount !== null ? dailyStop(daily, amount, token) : null;
   const toReady = toValid && !toSelf;
-  const amountReady = amount !== null && !tooMuch && !noGas;
+  const amountReady = amount !== null && !tooMuch && !noGas && stop === null;
   const ready = toReady && amountReady && token && rule;
 
   return (
@@ -113,10 +118,13 @@ export function SendFlow({ onClose, initialTo = "" }: { onClose: () => void; ini
           <p className="text-sm text-muted-foreground">
             Balance:{" "}
             <Amount value={balance.toString()} decimals={token.decimals} symbol={token.symbol} />
+            {daily ? ` · ${leftToday(daily, token)}` : null}
           </p>
         ) : null}
 
-        {rule ? (
+        {stop ? (
+          <Notice tone="warning" title={stop} />
+        ) : rule ? (
           <>
             <Notice tone={rule.kind === "none" ? "warning" : "info"} title={rule.summary} />
             <div>

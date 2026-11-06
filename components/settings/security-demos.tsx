@@ -52,7 +52,7 @@ export function SecurityDemos() {
         <div className="flex flex-col gap-2">
           <h3 className="text-sm font-medium">Stolen passkey calls installModule</h3>
           <p className="text-sm text-muted-foreground">
-            A thief tries to add a module with a stolen passkey, with no queue and no World ID.
+            A thief tries to add a module with a stolen passkey, with no queue.
           </p>
           <Button
             variant="secondary"
@@ -65,6 +65,11 @@ export function SecurityDemos() {
             <p className="text-sm text-muted-foreground">Add a passkey on this browser to run this test.</p>
           ) : null}
         </div>
+        {account.owner.kind !== "world" ? (
+          <p className="text-sm text-muted-foreground">
+            This wallet has no World ID, so it has no test with a different human.
+          </p>
+        ) : (
         <div className="flex flex-col gap-2">
           <h3 className="text-sm font-medium">Different human</h3>
           <p className="text-sm text-muted-foreground">
@@ -85,6 +90,7 @@ export function SecurityDemos() {
             </p>
           ) : null}
         </div>
+        )}
       </div>
       {request ? (
         <Sheet title="Security demo" onClose={() => setRequest(null)}>

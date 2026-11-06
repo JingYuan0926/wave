@@ -2,12 +2,13 @@
 
 import { Clock } from "lucide-react";
 import { useState } from "react";
-import type { MethodRef, PendingAction } from "@/lib/api-types";
+import { api } from "@/lib/api-client";
+import type { Hex, MethodRef, PendingAction } from "@/lib/api-types";
 import { formatCountdown, formatDuration } from "@/lib/ui/format";
-import { WORLD_ID, methodLabel, recoveryChoices, sameMethod } from "@/lib/ui/rules";
+import { methodLabel, recoveryChoices, sameMethod } from "@/lib/ui/rules";
 import { useNow } from "@/lib/ui/use-now";
 import { ApproveFlow, DecodedLines, anyMethod, requireMethod, type ApprovalRequest } from "./approve-flow";
-import { Badge, Button, Card, Notice, SectionTitle, Sheet, Skeleton } from "./ui";
+import { Badge, Button, Card, CopyHex, Notice, SectionTitle, Sheet, Skeleton } from "./ui";
 import { useWallet } from "./wallet-provider";
 
 function Countdown({ until }: { until: number }) {
@@ -23,9 +24,7 @@ function Countdown({ until }: { until: number }) {
 function delayText(action: PendingAction): string {
   const applied = formatDuration(action.appliedDelay).toLowerCase();
   const real = formatDuration(action.realDelay).toLowerCase();
-  return action.appliedDelay < action.realDelay
-    ? `Demo delay: ${applied} (real: ${real})`
-    : `Delay: ${real}`;
+  return action.appliedDelay < action.realDelay ? `Wait: ${applied}` : `Delay: ${real}`;
 }
 
 type OpenRequest = Omit<ApprovalRequest, "choices"> & { only?: MethodRef; choices?: ApprovalRequest["choices"] };
@@ -33,13 +32,36 @@ type OpenRequest = Omit<ApprovalRequest, "choices"> & { only?: MethodRef; choice
 function Row({
   action,
   onApprove,
+  onRan,
   approveChoices,
 }: {
   action: PendingAction;
   onApprove: (request: OpenRequest) => void;
+  onRan: (hash: Hex) => void;
   approveChoices: ApprovalRequest["choices"];
 }) {
-  const { info } = useWallet();
+  const { account, info, wallet, refresh } = useWallet();
+  const [running, setRunning] = useState(false);
+  const [runError, setRunError] = useState<string | null>(null);
+
+  // The owner approved this when it was queued. So on the local network it needs no new scan.
+  const execute = async () => {
+    if (!info?.gasSponsored || !wallet) {
+      onApprove({ action: { kind: "execute-scheduled", actionId: action.id } });
+      return;
+    }
+    setRunning(true);
+    setRunError(null);
+    try {
+      const { txHash } = await api.runScheduled({ account: wallet.address, actionId: action.id });
+      onRan(txHash);
+      await refresh();
+    } catch (cause) {
+      setRunError(cause instanceof Error ? cause.message : "WAVE could not run this action.");
+    } finally {
+      setRunning(false);
+    }
+  };
   const now = useNow();
   const over = action.executeAfter !== null && now !== 0 && now >= action.executeAfter;
   const canRun = action.status === "ready" || (action.status === "waiting" && over);
@@ -88,14 +110,8 @@ function Row({
             Approve
           </Button>
         ) : action.status !== "stale" ? (
-          <Button
-            variant="secondary"
-            disabled={!canRun}
-            onClick={() =>
-              onApprove({ action: { kind: "execute-scheduled", actionId: action.id } })
-            }
-          >
-            Execute
+          <Button variant="secondary" disabled={!canRun || running} onClick={execute}>
+            {running ? "Running…" : "Execute"}
           </Button>
         ) : null}
         <Button
@@ -103,10 +119,10 @@ function Row({
           onClick={() =>
             onApprove({
               action: { kind: "cancel", actionId: action.id },
-              only: action.cancelBy === "world" ? WORLD_ID : undefined,
+              only: action.cancelBy === "owner" ? account?.owner : undefined,
               note:
-                action.cancelBy === "world"
-                  ? "Only World ID can cancel a recovery."
+                action.cancelBy === "owner"
+                  ? "Only the owner method can cancel a recovery."
                   : "Any enrolled method can cancel this action.",
             })
           }
@@ -114,12 +130,14 @@ function Row({
           Cancel action
         </Button>
       </div>
+    {runError ? <Notice tone="danger" title="This action did not run">{runError}</Notice> : null}
     </li>
   );
 }
 
 export function PendingActions() {
   const { account, info, loading } = useWallet();
+  const [lastRun, setLastRun] = useState<Hex | null>(null);
   const [request, setRequest] = useState<ApprovalRequest | null>(null);
   const [sheetKey, setSheetKey] = useState(0);
 
@@ -156,11 +174,17 @@ export function PendingActions() {
               key={action.id}
               action={action}
               onApprove={open}
+              onRan={setLastRun}
               approveChoices={recoveryChoices(account.methods, info?.world, action.approvals)}
             />
           ))}
         </ul>
       )}
+      {lastRun ? (
+        <Notice title="The action ran">
+          <span className="font-mono text-xs break-all">{lastRun}</span> <CopyHex value={lastRun} />
+        </Notice>
+      ) : null}
       {request ? (
         <Sheet title="Approve" onClose={() => setRequest(null)}>
           <ApproveFlow key={sheetKey} request={request} />

@@ -1,15 +1,15 @@
 "use client";
 
-import { Fingerprint, Globe, Nfc } from "lucide-react";
+import { Fingerprint, Globe, KeyRound, Nfc } from "lucide-react";
 import { useState } from "react";
 import { ApproveFlow, requireMethod, type ApprovalRequest } from "@/components/approve-flow";
 import { Badge, Button, Card, Notice, SectionTitle, Sheet } from "@/components/ui";
 import { useWallet } from "@/components/wallet-provider";
-import type { MethodView, TierView, TokenInfo, TokenRules } from "@/lib/api-types";
+import type { MethodView, TierView, TokenInfo, TokenRules, WorldConfig } from "@/lib/api-types";
 import { formatAmount } from "@/lib/ui/format";
 import { findPasskey, savePasskey } from "@/lib/ui/local";
 import { enrolPasskey, passkeysSupported } from "@/lib/ui/passkey";
-import { WORLD_ID, freePasskeySlot, maskHas, methodLabel } from "@/lib/ui/rules";
+import { freePasskeySlot, maskHas, nameFor, changeTiming } from "@/lib/ui/rules";
 
 const UINT96_MAX = (BigInt(1) << BigInt(96)) - BigInt(1);
 
@@ -32,33 +32,49 @@ function spendLines(
   rules: TokenRules[],
   tokenBy: (address: string) => TokenInfo | undefined,
 ): string[] {
-  const isWorld = view.ref.kind === "world";
-  const synced = view.backup === "synced";
+  const synced = view.backup === "synced" && !view.owner;
   return rules.flatMap((rule) => {
     const token = tokenBy(rule.token);
     if (!token) return [];
-    // No tiers is the code default: World ID only, no delay.
-    if (rule.tiers.length === 0) return isWorld ? [`Any amount of ${token.symbol}, at once`] : [];
-    return rule.tiers
-      .filter((tier) => maskHas(tier.methods, view) && (!synced || tier.small))
-      .map((tier) => tierLine(tier, token));
+    // No tiers is the code default: the owner method only, no delay.
+    const lines =
+      rule.tiers.length === 0
+        ? view.owner
+          ? [`Any amount of ${token.symbol}, at once`]
+          : []
+        : rule.tiers
+            .filter((tier) => maskHas(tier.methods, view) && (!synced || tier.small))
+            .map((tier) => tierLine(tier, token));
+    // The hard total stops this method too, so "any amount" needs this line next to it.
+    if (lines.length === 0 || !rule.daily) return lines;
+    return [...lines, `At most ${formatAmount(rule.daily.limit, token.decimals)} ${token.symbol} per day, with all methods`];
   });
 }
 
 function otherLines(view: MethodView): string[] {
-  if (view.ref.kind === "world") {
+  if (view.owner) {
     return [
-      "Add or remove a method (waits in the queue)",
-      "Loosen spending rules (waits in the queue)",
-      "Token approvals and contract calls (wait in the queue)",
+      "Add or remove a method",
+      "Raise spending limits",
+      "Token approvals and contract calls",
       "Cancel any queued action",
     ];
   }
   return [
-    "Make spending rules stricter, at once",
+    "Lower spending limits, at once",
     "Cancel a normal queued action",
     ...(view.backup === "device-bound" ? ["Start or approve a recovery"] : []),
   ];
+}
+
+function statusLine(view: MethodView, world: WorldConfig | undefined): string {
+  if (view.ref.kind === "world") {
+    return world?.mode === "dev" ? "Owner method. Not a real World ID." : "Owner method. World App approves.";
+  }
+  if (view.owner) {
+    return `Owner method. ${view.backup === "synced" ? "Synced" : "Device-bound"} passkey. It can approve any amount.`;
+  }
+  return view.backup === "synced" ? "Synced passkey. It needs a limit." : "Device-bound passkey.";
 }
 
 function MethodRow({
@@ -71,12 +87,12 @@ function MethodRow({
   const { wallet, local, info, account, tokenBy } = useWallet();
   const spends = spendLines(view, account?.rules ?? [], tokenBy);
   const isPasskey = view.ref.kind === "passkey";
-  const Icon = isPasskey ? Fingerprint : Globe;
-  const here =
-    view.ref.kind === "passkey" &&
-    wallet !== null &&
-    local !== null &&
-    findPasskey(local, wallet.address, view.ref.slot) !== null;
+  const held =
+    view.ref.kind === "passkey" && wallet !== null && local !== null
+      ? findPasskey(local, wallet.address, view.ref.slot)
+      : null;
+  const here = held !== null;
+  const Icon = !isPasskey ? Globe : held?.name === "security-key" ? KeyRound : Fingerprint;
 
   return (
     <li className="flex items-start gap-3">
@@ -84,19 +100,13 @@ function MethodRow({
         <Icon aria-hidden="true" className="size-4" />
       </span>
       <div className="min-w-0 flex-1">
-        <p className="text-sm font-medium">{methodLabel(view.ref, info?.world)}</p>
+        <p className="text-sm font-medium">{nameFor(view.ref, held, info?.world)}</p>
         <p className="text-sm text-muted-foreground">
-          {view.backup === "synced"
-            ? "Synced passkey. It approves small tiers only."
-            : view.backup === "device-bound"
-              ? "Device-bound passkey."
-              : info?.world.mode === "dev"
-                ? "Not a real World ID. Always on."
-                : "Always on. World App approves."}
-          {isPasskey && !here ? " Not on this browser." : ""}
+          {statusLine(view, info?.world)}
+          {isPasskey && !here ? " Your device will ask you to pick it." : ""}
         </p>
         <p className="mt-2 text-xs font-medium">
-          {isPasskey ? "Sends with no World ID scan" : "Sends it can approve, one scan each"}
+          {view.ref.kind === "world" ? "Sends it can approve, one scan each" : "Sends it can approve"}
         </p>
         {spends.length > 0 ? (
           <ul className="list-disc pl-4 text-xs text-muted-foreground">
@@ -106,8 +116,7 @@ function MethodRow({
           </ul>
         ) : (
           <p className="text-xs text-muted-foreground">
-            None yet. Add this method to a{view.backup === "synced" ? " small" : ""} tier in
-            Spending rules.
+            None yet. Pick this method in Spending limits.
           </p>
         )}
         <p className="mt-1 text-xs font-medium">It can also</p>
@@ -116,19 +125,21 @@ function MethodRow({
             <li key={line}>{line}</li>
           ))}
         </ul>
-        {isPasskey ? (
+        {view.owner ? null : (
           <p className="mt-1 text-xs text-muted-foreground">
-            It cannot add or remove methods, loosen rules, or approve token permissions. Those
-            need World ID.
+            It cannot add or remove methods, raise limits, or approve token permissions. Those
+            need the owner method.
           </p>
-        ) : null}
+        )}
       </div>
-      {isPasskey ? (
+      {view.owner ? (
+        <Badge tone="success" className="shrink-0">
+          Owner method
+        </Badge>
+      ) : (
         <Button variant="ghost" onClick={() => onRemove(view)}>
           Remove
         </Button>
-      ) : (
-        <Badge>Always</Badge>
       )}
     </li>
   );
@@ -166,8 +177,8 @@ export function Methods() {
           publicKey: passkey.publicKey,
           backupEligible: passkey.backupEligible,
         },
-        choices: requireMethod(account.methods, WORLD_ID, info?.world),
-        method: WORLD_ID,
+        choices: requireMethod(account.methods, account.owner, info?.world),
+        method: account.owner,
       });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "The device did not create a passkey.");
@@ -180,16 +191,21 @@ export function Methods() {
     if (view.ref.kind !== "passkey") return;
     open({
       action: { kind: "remove-passkey", slot: view.ref.slot },
-      choices: requireMethod(account.methods, WORLD_ID, info?.world),
-      method: WORLD_ID,
+      choices: requireMethod(account.methods, account.owner, info?.world),
+      method: account.owner,
     });
   };
 
   return (
     <Card>
-      <SectionTitle hint="Adding or removing a method needs World ID, and waits in the queue.">
+      <SectionTitle hint={`Adding or removing a method needs the owner method. ${changeTiming(account.waitSeconds, 172800)}`}>
         Methods
       </SectionTitle>
+      {account.owner.kind === "world" ? null : (
+        <Notice title="This wallet has no World ID" className="mb-3">
+          It has no proof of human. A passkey is the owner method, and you cannot add World ID later.
+        </Notice>
+      )}
       <ul className="flex flex-col gap-3">
         {account.methods.map((view) => (
           <MethodRow key={view.validator} view={view} onRemove={remove} />
@@ -220,8 +236,8 @@ export function Methods() {
           </p>
         ) : null}
         <p className="text-sm text-muted-foreground">
-          Face ID and Touch ID often report a synced passkey. A synced passkey approves small
-          tiers only. A security key can be device-bound. Choose it in the browser prompt.
+          Face ID and Touch ID often report a synced passkey. A synced passkey needs a limit. A
+          security key can be device-bound. Choose it in the browser prompt.
         </p>
         {error ? <Notice tone="danger" title="WAVE could not add the passkey">{error}</Notice> : null}
       </div>
