@@ -25,26 +25,32 @@ export function PhoneFrame({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("resize", fit);
   }, [W, H]);
 
+  // transform: scale() does not change layout size. The outer box takes the scaled size, so the
+  // page never holds an 852 px phone in a shorter window. overflow-clip (not hidden) also stops
+  // focus() and scrollIntoView from scrolling the frame.
   return (
-    <div className="flex h-dvh items-center justify-center overflow-hidden">
-      <div
-        className="relative shrink-0 overflow-clip bg-white"
-        style={
-          {
-            width: W,
-            height: H,
-            borderRadius: IPHONE_16.radius,
-            transform: `scale(${scale})`,
-            boxShadow: `0 0 0 ${BEZEL}px #0a0a0a, 0 40px 90px -20px rgba(0,0,0,0.5)`,
-            "--nav-bottom": `${IPHONE_16.safeBottom - 8}px`,
-          } as CSSProperties
-        }
-      >
-        <StatusBar />
-        <div className="absolute inset-x-0 bottom-0 overflow-clip" style={{ top: IPHONE_16.safeTop }}>
-          {children}
+    <div className="flex h-dvh items-center justify-center overflow-clip">
+      <div className="relative shrink-0" style={{ width: W * scale, height: H * scale }}>
+        <div
+          className="absolute left-0 top-0 overflow-clip bg-white"
+          style={
+            {
+              width: W,
+              height: H,
+              borderRadius: IPHONE_16.radius,
+              transform: `scale(${scale})`,
+              transformOrigin: "top left",
+              boxShadow: `0 0 0 ${BEZEL}px #0a0a0a, 0 40px 90px -20px rgba(0,0,0,0.5)`,
+              "--nav-bottom": `${IPHONE_16.safeBottom - 8}px`,
+            } as CSSProperties
+          }
+        >
+          <StatusBar />
+          <div className="absolute inset-x-0 bottom-0 overflow-clip" style={{ top: IPHONE_16.safeTop }}>
+            {children}
+          </div>
+          <div className="pointer-events-none absolute bottom-2 left-1/2 z-[60] h-[5px] w-36 -translate-x-1/2 rounded-full bg-ink" aria-hidden />
         </div>
-        <div className="pointer-events-none absolute bottom-2 left-1/2 z-[60] h-[5px] w-36 -translate-x-1/2 rounded-full bg-ink" aria-hidden />
       </div>
     </div>
   );
