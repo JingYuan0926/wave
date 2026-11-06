@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "WAVE",
-  description: "A wallet you create and approve with World ID. No seed phrase.",
+  description: "A wallet with no seed phrase. You choose how you approve.",
 };
 
 export const viewport: Viewport = {

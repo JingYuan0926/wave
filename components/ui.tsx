@@ -128,7 +128,7 @@ export function Notice({
   );
 }
 
-const fieldStyles = `min-h-11 w-full rounded-xl border border-border bg-background px-3 text-sm text-foreground placeholder:text-muted-foreground disabled:opacity-50 ${focusRing}`;
+export const fieldStyles = `min-h-11 w-full rounded-xl border border-border bg-background px-3 text-sm text-foreground placeholder:text-muted-foreground disabled:opacity-50 ${focusRing}`;
 
 type FieldProps = {
   label: string;

@@ -12,7 +12,7 @@ import {
 } from "react";
 import { api, isOffline } from "@/lib/api-client";
 import type { AccountResponse, ActivityItem, InfoResponse, TokenInfo } from "@/lib/api-types";
-import { useLocalState, type LocalState, type LocalWallet } from "@/lib/ui/local";
+import { adoptRecoveryPasskey, useLocalState, type LocalState, type LocalWallet } from "@/lib/ui/local";
 
 const POLL_MS = 5000;
 
@@ -38,6 +38,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const local = useLocalState();
   const wallet = local?.wallet ?? null;
   const address = wallet?.address ?? null;
+  const plan = wallet?.plan;
 
   const [info, setInfo] = useState<InfoResponse | null>(null);
   const [account, setAccount] = useState<AccountResponse | null>(null);
@@ -51,7 +52,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     const mine = ++generation.current;
     try {
       const nextInfo = await api.info();
-      const nextAccount = address ? await api.account(address) : null;
+      const nextAccount = address ? await api.account(address, plan) : null;
       const nextActivity = address ? await api.activity(address) : null;
       if (mine !== generation.current) return;
       setInfo(nextInfo);
@@ -70,7 +71,13 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     } finally {
       if (mine === generation.current) setSettled(true);
     }
-  }, [address]);
+  }, [address, plan]);
+
+  useEffect(() => {
+    if (account?.owner.kind === "passkey" && account.ownerKeyX) {
+      adoptRecoveryPasskey(account.address, account.owner.slot, account.ownerKeyX);
+    }
+  }, [account]);
 
   useEffect(() => {
     if (!local) return;
