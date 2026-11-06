@@ -1,0 +1,86 @@
+@import "tailwindcss";
+@import "@fontsource-variable/plus-jakarta-sans";
+
+/* WAVE design tokens. Light mode only. */
+@theme {
+  --font-sans: "Plus Jakarta Sans Variable", ui-sans-serif, system-ui, sans-serif;
+
+  --color-ink: #0b1b2b;
+  --color-ink-2: #2f3d4c;
+  --color-muted: #5b6878;
+  --color-line: #e2e7ec;
+  --color-surface: #f2f5f7;
+  --color-surface-2: #e7ecf0;
+
+  --color-wave: #5fe0e8;
+  --color-wave-soft: #dcf6f8;
+  --color-wave-mist: #e6f6fa;
+  --color-wave-deep: #0a4a57;
+
+  --color-positive: #0f7a4d;
+  --color-danger: #b42318;
+  --color-danger-soft: #fdecea;
+  --color-warn: #8a5300;
+  --color-warn-soft: #fff4e0;
+
+  --animate-sheet-in: sheet-in 340ms cubic-bezier(0.32, 0.72, 0, 1);
+  --animate-fade-in: fade-in 200ms ease-out;
+  --animate-pop-in: pop-in 260ms cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  --animate-card-in: card-in 700ms cubic-bezier(0.22, 1, 0.36, 1) 250ms both;
+
+  /* A new card drops into the holder from above. */
+  @keyframes card-in {
+    0% { transform: translateY(-110%) rotate(-2deg); }
+    70% { transform: translateY(6px) rotate(0); }
+    100% { transform: translateY(0); }
+  }
+  @keyframes sheet-in {
+    from { transform: translateY(100%); }
+    to { transform: translateY(0); }
+  }
+  @keyframes fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  @keyframes pop-in {
+    from { opacity: 0; transform: scale(0.85); }
+    to { opacity: 1; transform: scale(1); }
+  }
+}
+
+@utility no-scrollbar {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  color-scheme: light;
+  background: var(--color-surface-2);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+body.is-ext {
+  background: #fff;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+  }
+}
