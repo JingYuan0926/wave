@@ -56,7 +56,7 @@ export function Agents({ nav }: { nav: Nav }) {
                     aria-checked={a.active}
                     aria-label={`${a.name} ${a.active ? "active" : "paused"}`}
                     onClick={() => toggleAgent(a.id)}
-                    className={`relative h-8 w-13 shrink-0 rounded-full transition-colors ${a.active ? "bg-wave-deep" : "bg-[#c5ced6]"} ${focusRing}`}
+                    className={`relative h-8 w-13 shrink-0 rounded-full transition-colors ${a.active ? "bg-wave-deep" : "bg-[#c8cdcd]"} ${focusRing}`}
                   >
                     <span
                       className={`absolute top-1 size-6 rounded-full bg-white shadow transition-transform ${a.active ? "translate-x-6" : "translate-x-1"}`}
@@ -83,7 +83,7 @@ export function Agents({ nav }: { nav: Nav }) {
                     aria-valuemin={0}
                     aria-valuemax={100}
                   >
-                    <div className={`h-full rounded-full ${a.active ? "bg-wave-deep" : "bg-[#c5ced6]"}`} style={{ width: `${pct}%` }} />
+                    <div className={`h-full rounded-full ${a.active ? "bg-wave-deep" : "bg-[#c8cdcd]"}`} style={{ width: `${pct}%` }} />
                   </div>
                 </div>
               </li>

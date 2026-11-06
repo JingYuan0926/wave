@@ -186,7 +186,7 @@ function MethodRow({
       {badge && (
         <span
           className={`shrink-0 rounded-full px-2.5 py-1 text-[13px] font-semibold ${
-            badge.tone === "accent" ? "bg-wave text-ink" : badge.tone === "warn" ? "bg-warn-soft text-warn" : "bg-[#e3f4e8] text-positive"
+            badge.tone === "accent" ? "bg-wave text-ink" : badge.tone === "warn" ? "bg-warn-soft text-warn" : "bg-wave-soft text-positive"
           }`}
         >
           {badge.text}
@@ -198,7 +198,7 @@ function MethodRow({
           onClick={action.onClick}
           disabled={action.disabled}
           className={`h-10 shrink-0 rounded-full px-4 text-[15px] font-semibold ${
-            action.disabled ? "bg-warn-soft text-warn" : "bg-wave-deep text-white hover:bg-[#083b45]"
+            action.disabled ? "bg-warn-soft text-warn" : "bg-wave-deep text-white hover:bg-[#222626]"
           } ${focusRing}`}
         >
           {action.label}

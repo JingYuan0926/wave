@@ -88,7 +88,7 @@ export function Home({ nav }: { nav: Nav }) {
             key={label}
             type="button"
             onClick={fn}
-            className={`inline-flex h-11 shrink-0 items-center rounded-full bg-wave-soft px-4 text-base font-semibold hover:bg-[#cdf0f3] active:scale-[0.97] ${focusRing}`}
+            className={`inline-flex h-11 shrink-0 items-center rounded-full bg-wave-soft px-4 text-base font-semibold hover:bg-[#d3f8ea] active:scale-[0.97] ${focusRing}`}
           >
             {label}
           </button>

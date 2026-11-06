@@ -35,7 +35,7 @@ export function PhoneFrame({ children }: { children: ReactNode }) {
             height: H,
             borderRadius: IPHONE_16.radius,
             transform: `scale(${scale})`,
-            boxShadow: `0 0 0 ${BEZEL}px #0b1b2b, 0 40px 90px -20px rgba(11,27,43,0.5)`,
+            boxShadow: `0 0 0 ${BEZEL}px #070808, 0 40px 90px -20px rgba(7,8,8,0.5)`,
             "--nav-bottom": `${IPHONE_16.safeBottom - 8}px`,
           } as CSSProperties
         }

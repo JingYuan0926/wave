@@ -89,7 +89,7 @@ export const METHOD_INFO: Record<MethodKind, { name: string; approves: string }>
 
 export const METHOD_CARDS: MethodCard[] = [
   { id: "m1", kind: "worldid", design: "night", activeAt: 0 },
-  { id: "m2", kind: "faceid", design: "ocean", activeAt: 0 },
+  { id: "m2", kind: "faceid", design: "mint", activeAt: 0 },
 ];
 
 export type Recipient = {
