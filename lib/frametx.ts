@@ -22,7 +22,7 @@ export const KEYED_NONCE_STATE_GAS = 97_920n
 
 /** Execution gas of the VERIFY frame. Measured values are in scripts/e2e.ts output. */
 export const WORLD_VERIFY_GAS = 400_000n
-export const PASSKEY_VERIFY_GAS = 60_000n
+export const PASSKEY_VERIFY_GAS = 80_000n
 export const AGENT_VERIFY_GAS = 60_000n
 /** Execution gas of the gas station frame. APPROVE writes the keyed nonce here, about 20k gas on first use. */
 export const PAY_VERIFY_GAS = 60_000n
@@ -42,7 +42,16 @@ export async function keyedNonce(sender: Address, validator: Address): Promise<b
   return BigInt(value)
 }
 
-export type DeployFrame = { factory: Address; implementation: Address; args: Hex; salt: Hex }
+export type DeployFrame = {
+  factory: Address
+  implementation: Address
+  args: Hex
+  salt: Hex
+  /** Empty for a wallet with one method. */
+  setup: Hex
+  /** Overrides the state gas of the DEFAULT frame. */
+  state?: bigint
+}
 
 export type SenderFrame = { data: Hex; execution?: bigint; state?: bigint }
 
@@ -71,16 +80,16 @@ export async function buildTx(input: BuildInput): Promise<FrameTx> {
   const nonceSeq = input.nonceSeq ?? (await keyedNonce(input.account, input.validator))
   const frames = []
   if (input.deploy) {
-    const { factory, implementation, args, salt } = input.deploy
+    const { factory, implementation, args, salt, setup, state } = input.deploy
     frames.push(
       hs.frame(profile, 'DEFAULT', {
         target: factory,
         execution: 100_000n,
-        state: BigInt(1530 * (45 + (args.length - 2) / 2)),
+        state: state ?? BigInt(1530 * (45 + (args.length - 2) / 2)),
         data: encodeFunctionData({
           abi: WaveAccountFactoryAbi,
           functionName: 'createAccount',
-          args: [implementation, args, salt],
+          args: [implementation, args, salt, setup],
         }),
       }),
     )

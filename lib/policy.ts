@@ -18,7 +18,8 @@ export const KIND_RECOVERY = 1
 export const STATUS = ['none', 'collecting', 'queued', 'done', 'cancelled'] as const
 export const MODULE_TYPE_FRAME_VALIDATOR = 11n
 
-export const WORLD_BIT = 1
+/** The owner method: World ID or a passkey. */
+export const OWNER_BIT = 1
 export const SMALL_TIER = 0x80
 /** The method bit of passkey slot N is bit N. */
 export const passkeyBit = (slot: number) => 1 << slot
@@ -88,8 +89,9 @@ export const cancelData = (id: Hex): Hex => encodeFunctionData({ abi: WaveAccoun
 export const approveRecoveryData = (id: Hex): Hex =>
   encodeFunctionData({ abi: WaveAccountAbi, functionName: 'approveRecovery', args: [id] })
 
-export const tightenData = (token: Address, tiers: Tier[]): Hex =>
-  encodeFunctionData({ abi: WaveAccountAbi, functionName: 'tighten', args: [token, tiers] })
+/** `dailyLimit` is the whole value, not a change: send the current limit to keep it. 0 means no limit. */
+export const tightenData = (token: Address, tiers: Tier[], dailyLimit: bigint): Hex =>
+  encodeFunctionData({ abi: WaveAccountAbi, functionName: 'tighten', args: [token, tiers, dailyLimit] })
 
 /** frame data of the VERIFY frame: the index of the ARBITRARY signature entry. */
 export const verifyData = (signatureIndex = 0n): Hex =>
@@ -129,11 +131,16 @@ export const uninstallModuleCall = (account: Address, module: Address): Call =>
     }),
   )
 
-export const setTiersCall = (account: Address, token: Address, tiers: Tier[]): Call =>
-  selfCall(account, encodeFunctionData({ abi: WaveAccountAbi, functionName: 'setTiers', args: [token, tiers] }))
+/** `dailyLimit` is the whole value, not a change: send the current limit to keep it. 0 removes the limit. */
+export const setTiersCall = (account: Address, token: Address, tiers: Tier[], dailyLimit: bigint): Call =>
+  selfCall(account, encodeFunctionData({ abi: WaveAccountAbi, functionName: 'setTiers', args: [token, tiers, dailyLimit] }))
 
 export const setOwnerCall = (account: Address, ownerNullifierHash: bigint): Call =>
   selfCall(account, encodeFunctionData({ abi: WaveAccountAbi, functionName: 'setOwner', args: [ownerNullifierHash] }))
+
+/** A recovery of an owner passkey. */
+export const setOwnerKeyCall = (account: Address, initData: Hex): Call =>
+  selfCall(account, encodeFunctionData({ abi: WaveAccountAbi, functionName: 'setOwnerKey', args: [initData] }))
 
 export const setRootSourceCall = (account: Address, sourceId: Hex): Call =>
   selfCall(account, encodeFunctionData({ abi: WaveAccountAbi, functionName: 'setRootSource', args: [sourceId] }))
