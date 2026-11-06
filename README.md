@@ -4,23 +4,27 @@
 
 *Your identity. Your wallet. Your rules.*
 
-**A wallet you create and approve with World ID, with no seed phrase and no separate EOA
-signing key.** Add passkeys in Settings. The account enforces permissions and delays onchain.
-NFC signing cards come later.
+**A wallet with no seed phrase and no separate EOA signing key. You choose how it approves.**
+At creation, tick any mix of World ID, a passkey and a security key. The account enforces
+permissions and delays onchain. NFC signing cards come later.
+
+A wallet with no World ID has no proof of human. The chain does not check that a human owns it.
 
 Built at ETHGlobal Mumbai 2026 on EIP-8141 frame transactions, ERC-8286 frame validators,
 EIP-8250 keyed nonces and EIP-8272 recent roots.
 
 > **Status: a working prototype on a local stack.** Every test ran on a local chain with a
-> local sidecar. No real World ID scan has run yet. No real Face ID or Touch ID has run yet.
-> The gas sponsor runs on the local network only. Agent wallets and World ID Agent Pass are built
-> but not tested. A claim is proven only when its item in [Build status](#build-status) is checked.
+> local sidecar. A real sandbox World ID has created a wallet and sent a transaction on the local
+> chain. Real Touch ID has enrolled a passkey, but no real Touch ID or Face ID send has run yet.
+> The gas sponsor runs on the local network only. Agent wallets passed a browser run on the local
+> chain with a test identity. World ID Agent Pass completed a real sandbox login with a stand-in
+> action. A claim is proven only when its item in [Build status](#build-status) is checked.
 > Not audited.
 
 **What the name means:** the account first checks **authorization**: does the owner's rule allow
 this method for this action? Then it **verifies** the World ID proof or the passkey assertion.
-Only then does it permit **execution** of the requested calls, under the owner's limits, delays
-and cancel rules. "Verified Execution" does not mean a separate cryptographic proof of execution.
+Only then does it permit **execution** of the requested calls, under the owner's limits, any wait
+that the owner chose, and the cancel rules. "Verified Execution" does not mean a separate cryptographic proof of execution.
 
 ---
 
@@ -37,19 +41,21 @@ and cancel rules. "Verified Execution" does not mean a separate cryptographic pr
 
 ## The idea
 
-1. **No seed phrase and no separate EOA signing key.** At creation, the account's only validator
-   is a World ID check. World ID still uses cryptographic secrets. World App on the owner's phone
-   holds them, and the owner never manages them as a seed phrase.
-2. **Mix and match.** In Settings, the owner can add passkeys (Face ID, Touch ID or a security
-   key). NFC signing cards come later. These methods bring their own keys, held in the device or
-   in the card. The owner chooses which method approves which action.
-3. **Owner-set limits.** The owner sets amount limits per method. For example, Face ID approves
-   transfers under 100 USDC, and World ID approves 100 USDC or more. The owner also sets time
-   limits: a delay for each tier, and totals per day or per week.
-4. **A cancellation window.** Sensitive actions are scheduled first and run only after a delay.
-   Enrolled methods can cancel them, under the cancel rules below. Spending under the daily limit
-   stays immediate.
-5. **Wallets for your agents (built, not tested).** Create a separate WAVE wallet for each agent.
+1. **No seed phrase and no separate EOA signing key.** World ID still uses cryptographic secrets.
+   World App on the owner's phone holds them. A passkey or a security key holds its own key in the
+   device. The owner never manages any of these as a seed phrase.
+2. **Mix and match, from the first screen.** Each method is optional. The owner ticks any mix of
+   World ID, a passkey on the device and a security key. NFC signing cards come later.
+3. **One owner method.** The ticked method that ranks highest is the owner method. The rank is
+   World ID, then security key, then passkey. It approves big sends and changes to the wallet.
+4. **Owner-set limits.** Each extra method approves sends up to the amount that the owner sets, at
+   once. The owner method approves above that. The owner can also set a delay for each tier, and
+   totals per day or per week. A daily limit is a hard stop: after that total, no method can send
+   that token until the 24 hours end.
+5. **An optional wait.** The owner chooses a wait of 1, 24 or 48 hours at creation, or no wait. A
+   wait gives a window to cancel if someone steals a method. **A wallet with no wait has no
+   cancellation window.** Spending under the daily limit stays immediate in every case.
+6. **Wallets for your agents.** Create a separate WAVE wallet for each agent.
    Give each one its own balance and spending limits. Your main WAVE wallet is its master.
 
 ## How it works
@@ -119,27 +125,58 @@ verifyProof(uint256[8] proof, uint256[4] input)
 We follow the account and factory pattern of the
 [ERC-8286 playground](https://github.com/chiranjeev13/erc8286-playground). Its
 `SphincsFrameValidator` already shows an account with no ECDSA key (it uses a post-quantum key).
-We replace that key with a World ID check.
+We replace that key with the method that the owner ticks.
+
+**The first screen.** Each row is an optional tick box, and all rows start unticked. The owner must
+tick at least one. Any mix is valid.
+
+| Row | Rank for the owner method |
+|---|---|
+| World ID | 1 |
+| Security key | 2 |
+| Passkey on this device (Face ID / Touch ID) | 3 |
+| NFC card | Coming later. The row is disabled. |
+
+- Face ID and Touch ID are one row, because the device chooses the prompt.
+- Each extra method shows one field, "Approve sends up to". The default is 100 tUSDC.
+- With one method, the screen warns: "If you lose this method, you lose this wallet. Add a second
+  method." This is a warning, not a block.
+- Press Create. The browser asks for each ticked key. World ID comes last, with its own button,
+  because a scan cannot start a WebAuthn prompt.
 
 ```
 args     = validator || approvalScopes || modeBits || executionRoute || demoDelay || initData
-initData = ownerNullifierHash || externalNullifierHash || rootSourceId      (initial values)
-salt     = keccak256(ownerNullifierHash)
+           || setupHash                                      (only with extra methods)
+initData = ownerNullifierHash || externalNullifierHash || rootSourceId      (World ID owner)
+initData = x || y || flags                                                  (passkey owner)
+setup    = abi.encode(extra methods, first tiers)
+salt     = keccak256(ownerNullifierHash), or keccak256(x || y) for a passkey owner
 account  = CREATE2(factory, salt, clone code || args)
 ```
 
+- `validator` is the **owner method**. Every owner-only rule checks this one validator, so the
+  rules have no separate branch for World ID.
 - `ownerNullifierHash` is the owner's anonymous World ID 3.0 nullifier for our app and action.
   The same human gets the same value every time for the same action.
-- The address commits to the validator and the initial owner. Nobody can deploy this address
-  with a different owner.
-- `demoDelay` (uint32) caps every delay, for the demo. Zero means real delays. The default is 120
-  seconds. The address commits to it, and the app shows "Demo delay: 2 minutes (real: 48 hours)".
+- The address commits to the owner method, its key, the wait and the setup hash. Nobody can deploy
+  this address with a different owner, other extra methods or other first rules.
+- `WaveAccount.setup` installs the extra methods. The factory calls it in the deploy call, with
+  bytes that must match `setupHash`. It runs once, and no `SENDER` frame can reach it. After that,
+  a new method must use the queue.
+- `demoDelay` (uint32) holds the **wait**, and the name stays for the clone layout. Zero means real
+  delays. `NO_WAIT` (`0xffffffff`) means no wait. Another value caps the config, loosen, other-call
+  and recovery delays through `effectiveDelay`. It does not change a tier delay.
+- **The wait is set at creation. Nobody can change it later**, because it is in the clone code. The
+  app sets it from the creation screen. `WAVE_DEMO_DELAY` is the default for test scripts only.
 - **Initial values sit in the clone code. Changes go to storage and override them**, the same way
-  the playground's getters read storage first and fall back to code. This covers the owner
-  nullifier, the root source, the methods and the limits. Every change goes through the delay
-  queue, except a stricter rule.
+  the playground's getters read storage first and fall back to code. This covers the owner, the
+  root source, the methods and the limits. Every change goes through the queue, except a stricter
+  rule.
+- World ID can only be the owner method. A wallet with no World ID cannot add it later.
 - On the public devnet, the account deploys itself in the first frame of its own first
   transaction (a `DEFAULT` frame that calls the factory). It must hold ETH before that transaction.
+  A setup does not fit that frame, so **on the devnet a new wallet holds one method**. The screen
+  limits the rows there. The owner adds more methods in Settings.
 - On the local network, the gas sponsor deploys the account with a plain transaction. See
   [Gas sponsor](#gas-sponsor-local-network-only).
 
@@ -304,7 +341,8 @@ World ID roots live on World Chain and Ethereum, not on the devnet.
 
 ### More methods: mix and match
 
-Each method is its own ERC-8286 frame validator. The owner installs them in Settings.
+Each method is its own ERC-8286 frame validator. The owner ticks them at creation, or adds passkeys
+later in Settings.
 
 | Validator | What the user does | What the chain checks | Status |
 |---|---|---|---|
@@ -324,9 +362,12 @@ Each method is its own ERC-8286 frame validator. The owner installs them in Sett
 - **This check alone does not establish hardware-backed storage**, and it does not prove that
   Face ID was used. That would need an attestation policy.
 - Backup-eligible (synced) passkeys can approve only the tiers that the owner marks as small.
-  They cannot propose or approve a fallback change (`SyncedNotAllowed`).
+  They cannot propose or approve a fallback change (`SyncedNotAllowed`). The rules at creation mark
+  each extra method's tier as small, so a synced extra method can use its limit.
+- **An owner passkey is a full method.** It has the owner bit, so a synced owner passkey is not
+  limited to small tiers.
 - A passkey validator instance serves one slot. The deployment holds three, so an account can
-  enrol three passkeys.
+  enrol three passkeys. An owner passkey takes slot 1.
 - An NFC card works only if it can sign our transaction digest with a key the chain can verify.
   A FIDO2 NFC key should work through the passkey flow with no new contract. We have not tested
   this.
@@ -349,7 +390,8 @@ The account uses the **contract-dispatched execution route**.
 - **Configuration functions are not entry points.** Module changes, loosened limits, owner changes
   and root source changes run only from inside `executeScheduled`, after the delay.
 - **`tighten` changes limits at once.** It checks onchain that the new tiers are stricter than the
-  old ones, and it reverts with `NotStricter` otherwise.
+  old ones, and it reverts with `NotStricter` otherwise. The same call can add or lower the daily
+  limit. It cannot raise or remove the daily limit.
 - **Summary:** validation restricts execution routes, and every sensitive account entry point
   enforces the authorization and delay policy, including direct calls to configuration functions.
 - **In execution:** `execute` reads `TXPARAM(0x10)` to see which validator approved the
@@ -362,23 +404,83 @@ of a listed token that the owner's spending rules allow. Sensitive calls include
 `permit`, `setApprovalForAll`), operator permissions, unknown contract calls, any batch that holds
 a sensitive call, and module or configuration changes.
 
-A **listed token** is ETH, the Test USDC of the deployment, or a token that has tiers. A new
-account has no tiers. So World ID alone approves any transfer of a listed token, with no delay.
+A **listed token** is ETH, the Test USDC of the deployment, or a token that has tiers. A wallet with
+one method has no tiers. So the owner method alone approves any transfer of a listed token, with no
+delay. A wallet with extra methods starts with Test USDC tiers. ETH stays with the owner method.
 
 **Period limits are cumulative.** Each limit (for example, per day or per week) is one counter
 across all methods, all transactions and all batches. It is not checked separately for each
-method.
+method. There are two kinds:
 
-| Action | Who can approve | Delay |
+- **The daily limit is a hard stop.** Each token has one limit and one counter. Every method and
+  every tier share them. A send that would pass the limit reverts with `DailyLimitReached`. The
+  owner method and World ID cannot pass it. ETH and each token have their own limit. 0 means no
+  limit. A window starts again 24 hours after its first send.
+- **A cap on a tier is not a stop.** When the cap is used up, a send moves to the next tier. Only
+  the Advanced editor sets a tier cap.
+
+A plain transfer counts once. An immediate send counts in `execute`. A transfer with a tier delay
+counts in `schedule`, and `executeScheduled` counts nothing.
+
+**What the daily limit does not stop:**
+
+- **Sensitive calls can move tokens around the limit.** A token approval or an unknown contract
+  call is not a plain transfer, so it does not count. It needs the owner method and the queue.
+- **A queued transfer counts on the day that you queue it.** It does not count on the day that it
+  leaves. So a tier delay can put it in a later window, next to that day's sends. More tokens can
+  then leave in one 24 hours than the limit.
+- **A cancelled transfer stays counted** until the window ends. A cancel gives no refund.
+- **Gas fees do not count.** The fee limits on `verify` hold them.
+- **A withdrawal from an agent wallet to its master does not count.** It uses no spending rule.
+- **Any enrolled method can lower the limit.** So a stolen method can block sends, down to 1 base
+  unit. Only the owner method can raise the limit again, after the wait.
+- **The limit is only as strong as the wait.** With no wait, a stolen owner method can raise or
+  remove the limit at once.
+
+| Action | Who can approve | Delay on a wallet with real delays |
 |---|---|---|
 | Plain transfer of ETH or a listed token | The method that the owner's spending rule names for that amount | The delay that the rule names |
-| Token approval, operator permission, unknown contract call | World ID | 24 hours, cancellable |
-| Make the spending rules stricter (lower amount, stronger method, longer delay) | Any enrolled method | None |
-| Add or remove a method, loosen the spending rules, change the root source | World ID | 48 hours, cancellable |
-| Fallback owner change (World ID lost) | Two distinct device-bound methods. A synced passkey cannot take part. | 7 days, only World ID can cancel |
-| Root source change (publisher stopped) | Two distinct device-bound methods. A synced passkey cannot take part. | 7 days, only World ID can cancel |
+| Token approval, operator permission, unknown contract call | The owner method | 24 hours, cancellable |
+| Make the spending rules stricter (lower amount, stronger method, longer delay), add a daily limit, lower a daily limit | Any enrolled method | None |
+| Add or remove a method, loosen the spending rules, raise or remove a daily limit, change the root source | The owner method | 48 hours, cancellable |
+| Fallback owner change (owner method lost) | Two distinct device-bound methods other than the owner method. A synced passkey cannot take part. | 7 days, only the owner method can cancel |
+| Root source change (publisher stopped). World ID owner only. | Two distinct device-bound methods other than the owner method. A synced passkey cannot take part. | 7 days, only the owner method can cancel |
+
+**The wait that the owner chose replaces these delays.** The creation screen sets it:
+
+| Choice | Effect on the 24 hour, 48 hour and 7 day delays | Tier delay |
+|---|---|---|
+| Not ticked: no wait | All are 0. The action runs at once. | Stays as the owner set it |
+| 1 hour, 24 hours or 48 hours | Each one is the shorter of its real value and the choice | Stays as the owner set it |
+
+**With no wait, there is no queue step and no cancellation window.** One approval queues the change,
+and the server runs it at once with `POST /api/tx/run-scheduled`. That route accepts local callers
+only, and it needs no key from the owner, because the contract lets anyone run an action after its
+delay. The route works on the local network only. On the devnet the action shows as ready in Pending
+actions, and the owner presses Execute.
 
 ### Owner-set spending rules
+
+The owner sets these rules on the Spending limits cards in Settings, and on the creation screen.
+The screen has two choices, and it builds the rule:
+
+- **One method for every send.** The rule has one step, for any amount. A synced passkey cannot be
+  this method, because a synced passkey needs a limit.
+- **A limit, then a stronger method.** The first step goes up to the amount, and the owner method
+  can also approve there. The second step covers any amount above that, with the upper method. So a
+  large send always has an approver. The app sets the small flag when the lower method is synced.
+- **Most I can spend per day.** This optional field goes with both choices. It sets the hard daily
+  limit of that token, not a tier cap. After that total, no method can send that token until the 24
+  hours end. A day starts at the first send and runs for 24 hours. It is not a calendar day. The
+  creation screen sets this limit for Test USDC, and the wallet address commits to it. A wallet with
+  one method has no such field at creation, so it sets the limit in Settings.
+- **Advanced** stays closed by default. It sets a delay on a send, a total on a step, or more steps.
+  Its last step always covers any amount. A save here keeps the daily limit as it is.
+
+The Spending limits card and the Send sheet show the amount left, such as `150 tUSDC left today`.
+Above that amount, the Send sheet stops before any approval and shows when the window ends.
+
+The sections below use the contract words.
 
 The owner sets the spending rules in Settings. Each rule has amount tiers, and each tier names:
 
@@ -388,6 +490,8 @@ The owner sets the spending rules in Settings. Each rule has amount tiers, and e
 4. **A period cap** (optional): a total per day or per week for that tier. When the cap is used
    up, the next tier's rule applies.
 5. **A small mark** (optional). A synced passkey can approve a tier only if it has this mark.
+
+The daily limit is not in a tier. The account stores one limit per token, next to the tiers.
 
 **Example rule for USDC:**
 
@@ -404,16 +508,20 @@ mint.
 
 1. `execute` reads the token, the amount, the period counter and the approving validator
    (`TXPARAM(0x10)`).
-2. It finds the tier for that amount and that counter.
-3. If the tier does not allow the approving validator, the call reverts.
-4. If the tier has a delay, the transfer must go through `schedule` and `executeScheduled`.
+2. If the amount does not fit in what is left of the daily limit, the call reverts with
+   `DailyLimitReached`. This comes first, so no tier and no method can pass it.
+3. It finds the tier for that amount and that counter.
+4. If the tier does not allow the approving validator, the call reverts.
+5. If the tier has a delay, the transfer must go through `schedule` and `executeScheduled`.
 
 **Rules for changing the rules:**
 
 - **Making the rules stricter applies at once**, with any enrolled method. Examples: a lower
   amount, a stronger method or a longer delay.
-- **Making the rules looser needs World ID and waits 48 hours.** No rule can bring this 48-hour
-  floor down, so an attacker cannot remove the delays quickly.
+- **Making the rules looser needs the owner method.** The wait is the one that the owner chose at
+  creation. **The old 48-hour floor is now an owner choice.** With a wait, no rule can bring it down
+  after creation, so an attacker cannot remove it quickly. With no wait, an attacker who holds the
+  owner method can loosen the rules at once.
 - **Trade-off:** a stolen method can make the rules stricter. This can annoy the owner, but it
   cannot move funds to an attacker's address.
 - **Gas fees pass no spending rule.** The signer sets the fee, so `verify` rejects a fee above
@@ -442,9 +550,12 @@ mint.
 **Cancel rules:**
 
 - Any enrolled method can cancel a normal pending action.
-- Only World ID can cancel a fallback owner change or a fallback source change.
+- Only the owner method can cancel a fallback owner change or a fallback source change.
 - **Trade-off:** a compromised method can cancel normal actions again and again. It cannot block
-  the fallback recovery. But an attacker who controls World ID can block the fallback recovery.
+  the fallback recovery. But an attacker who controls the owner method can block the fallback
+  recovery.
+- **On a wallet with no wait, nobody can cancel anything.** A recovery runs at the second approval.
+  So two stolen device-bound methods take the wallet at once, and the owner method cannot stop them.
 
 **Configuration version:** owner changes, method revocations and security-policy changes increase
 a configuration version. Each scheduled action and each collected recovery approval stores the
@@ -462,14 +573,18 @@ Scheduled actions emit events, and the app shows them. This **creates a cancella
 It does not guarantee that the owner sees the action in time. Spending under the daily limit is
 still immediate.
 
-**An account with World ID only has no fallback.** If the owner loses World ID access for good,
-the funds are lost. An account with only synced passkeys has the same problem. The app asks the
-owner to enroll at least two more device-bound methods. Today that means two security keys.
+**A wallet with one method has no fallback.** If the owner loses that method for good, the funds are
+lost. A recovery needs two device-bound methods other than the owner method. Synced passkeys do not
+count. So a passkey plus a security key has no recovery either. The app asks the owner to enroll more
+device-bound methods. Today that means security keys.
+
+A recovery of an owner passkey uses `setOwnerKey`. The new key goes to storage and overrides the clone
+config. The address and the validator stay the same.
 
 ### Agent wallets
 
-> **Status: built, not tested.** The contracts, routes and `/agents` page compile. No agent wallet
-> has run on a chain.
+> **Status: tested on the local chain.** A browser run passed with a test identity and a virtual
+> authenticator. It covered creation, limits, pause, unpause, tighten, loosen, withdraw and revoke.
 
 **You create each agent wallet. Your main wallet is its master. You create it the same way that you
 create a normal wallet.**
@@ -491,7 +606,7 @@ wallet has no `master` bytes.
 
 | Account | Authorization |
 |---|---|
-| Main wallet | The owner's World ID and other enrolled methods |
+| Main wallet | The owner method and other enrolled methods |
 | Agent wallet | The agent key spends inside the tiers. Only the master can administer the wallet. |
 
 EIP-8141 supplies the verification and execution steps. ERC-8286 supplies the validator interface.
@@ -501,7 +616,7 @@ ownership.**
 **To create an agent wallet:**
 
 1. Open `/agents`, then set the limits and the "ask a human above" amount.
-2. Approve with World ID, in the same screens as a normal wallet.
+2. Approve with the owner method, in the same screens as a normal wallet.
 3. The server deploys the agent wallet with a plain transaction, as the sponsor does for a main
    wallet.
 4. The main wallet sends `agentSetup`, which sets the agent key and the first tiers. This works
@@ -528,12 +643,12 @@ control of its agent wallets. An agent wallet has no World ID owner and no recov
 
 | Action | Who can approve | Delay |
 |---|---|---|
-| Create an agent wallet (it holds no funds yet) | World ID | None |
+| Create an agent wallet (it holds no funds yet) | The owner method | None |
 | Send funds to an agent wallet | The main wallet's spending rule for that amount | The delay that the rule names |
 | Revoke the agent key, or pause the agent | Any enrolled method | None |
 | Make the agent's limits stricter | Any enrolled method | None |
 | Withdraw funds to the main wallet | Any enrolled method | None |
-| Loosen the agent's limits, replace the key, unpause | World ID | 48 hours (or the demo delay), cancellable |
+| Loosen the agent's limits, replace the key, unpause | The owner method | 48 hours, or the chosen wait |
 
 The main wallet's default deny treats other contract calls as unknown calls, which wait 24 hours.
 A revoke must not wait. So `execute` has a defined exception for these actions, and the exception
@@ -546,15 +661,17 @@ reads the code of the target. The target must be a clone that names this main wa
 - The agent key is a signing key. The "no seed phrase and no EOA key" claim covers the main wallet,
   not the agent wallet.
 - A stolen agent key can spend up to the agent's limits, until the owner revokes it.
-- A stolen main wallet method can revoke or pause an agent. The restore needs World ID and 48 hours.
+- A stolen main wallet method can revoke or pause an agent. The restore needs the owner method and
+  the chosen wait.
 - There is no list of allowed targets. The limits set the amount, not the recipient.
-- An agent wallet does not prove that a human runs the agent. World ID authenticates the owner of
-  the main wallet, not the agent.
+- An agent wallet does not prove that a human runs the agent.
+- **"Ask a human" needs World ID, also for a wallet with no World ID method.** Agent Pass is a
+  separate World login. It does not use the wallet's methods.
 
 #### Human approval with World ID Agent Pass
 
-> **Status: built, not tested.** No World ID login has completed through this flow, and no agent
-> spend has run through it.
+> **Status: partly tested.** A real sandbox World ID login approved a stand-in action. A real agent
+> spend ran through this flow only with a local fake issuer. That issuer is not World.
 
 An agent can act alone only up to a limit. Above that limit, a human must approve this exact
 action at that moment. World ID Agent Pass gives this fresh human check.
@@ -564,7 +681,7 @@ action at that moment. World ID Agent Pass gives this fresh human check.
 **How it works:**
 
 1. The agent asks for a spend above its "ask a human above" amount. The server stores the exact
-   action (agent wallet, recipient, token, amount), with a 5-minute expiry and a one-use approval
+   action (agent wallet, recipient, token, amount), with a 1-minute expiry and a one-use approval
    ID. Nothing runs yet.
 2. `/agents` shows "Needs human approval" with the decoded action.
 3. The owner completes a fresh World ID authentication. WAVE requests `max_age=0`.
@@ -654,19 +771,22 @@ risks move. This table lists them.
 | Threat | Result | Our defense | Remaining risk |
 |---|---|---|---|
 | A malicious frontend shows one transaction and asks for a proof for another. World App does not decode transactions. | An attacker gets a proof for their own transaction. | Caps. The delay queue for every sensitive action. | **Remains.** A trusted approval surface that decodes the transaction independently would fix it. |
-| Someone controls the owner's phone and World App | They can make valid World ID proofs. | Daily limits. Delays. Other methods can cancel. | Immediate spending under the daily limit. |
+| Someone controls the owner's phone and World App | They can make valid World ID proofs. | Daily limits. The chosen wait. Other methods can cancel. | Immediate spending under the daily limit. With no wait, every action. |
 | World ID recovery or reset | If recovery keeps the nullifier, whoever passes World's recovery can approve. If a reset changes the nullifier, World ID stops working for this account. | The fallback owner change with two distinct device-bound methods and a 7-day delay. | An account with World ID only has no fallback. An account with only synced passkeys has none either. |
-| A downgrade attack with a weaker method | A stolen method tries to remove the stronger ones. | Module and rule changes need World ID and a delay. Configuration functions are not entry points. | Tests pass on the local stack. No audit has checked bypass resistance. |
+| A downgrade attack with a weaker method | A stolen method tries to remove the stronger ones. | Module and rule changes need the owner method, and the chosen wait. Configuration functions are not entry points. | Tests pass on the local stack. No audit has checked bypass resistance. |
 | A stolen method burns the ETH balance as gas fees | The ETH goes to the block producer. The spending rules do not see it. | `verify` limits the fee per gas and the total cost of one transaction. | Repeated transactions up to the limit, until the owner removes the method. |
+| A passkey-only wallet | **No human check.** The chain does not know that a human owns the wallet. **Loss means no recovery**, unless the wallet also holds two device-bound methods other than the owner method. | None for the human check. The screen warns at creation. | Sybil use. Loss of the funds. World ID cannot be added later. |
+| A wallet with no wait, and a stolen owner method | The thief can change the rules, add a method and spend at once. | The owner's choice at creation. The screen says this. | **No cancellation window.** |
+| A wallet with no wait, and two stolen device-bound methods | The thief can run a recovery and take the wallet at once. | None. | **The owner method cannot cancel it.** |
 | A removed credential leaves a queued action behind | The action could run after the credential is gone. | The configuration version invalidates every queued action and collected approval. | Tests pass on the local stack. No audit. |
 | An inauthentic or stale root from the publisher | A fabricated root alone does not give the owner's credential. | A pinned source. | **We trust the publisher** for authenticity, freshness and revocation. The publisher route does not check a root. |
-| The root publisher stops | World ID approvals stop. | Source change with two distinct device-bound methods and a 7-day delay. | An account with World ID only freezes. |
+| The root publisher stops | World ID approvals stop. | Source change with two distinct device-bound methods and a 7-day delay. | A wallet with World ID only freezes. A wallet with a passkey owner does not use roots. |
 | The alternative mempool is not available | Transactions that need the larger budget cannot be sent. | Passkey `VERIFY` frames use about 30k to 50k gas, under the 100k cap. | The stock sidecar still rejects passkeys, because they call precompiles. World ID transactions cannot be sent without a changed sidecar. |
-| A bad or buggy validator module | A module runs with full control of the account (`DELEGATECALL`). | Install only reviewed modules. Changes need World ID and a delay. | Module bugs. |
+| A bad or buggy validator module | A module runs with full control of the account (`DELEGATECALL`). | Install only reviewed modules. Changes need the owner method and the chosen wait. | Module bugs. |
 | Dapps that ask for offchain signatures (ERC-1271, permits, sign-in) | The prototype cannot sign them. | None yet. | Some dapps will not work. |
-| Coercion | The owner is forced to approve. | Delays on sensitive actions. | Immediate spending under the daily limit. |
-| A stolen agent credential (built, not tested) | The attacker can act as the agent. | The agent's budget and permissions. The owner can revoke at once. | Spending up to the budget before the owner revokes. |
-| A wallet that falsely names our main wallet as owner (built, not tested) | It can look like one of our agent wallets. | The app lists only the agent wallets that the main wallet recorded. | Other apps can still show the false wallet. |
+| Coercion | The owner is forced to approve. | The chosen wait, on sensitive actions. | Immediate spending under the daily limit. With no wait, every action. |
+| A stolen agent credential | The attacker can act as the agent. | The agent's budget and permissions. The owner can revoke at once. | Spending up to the budget before the owner revokes. |
+| A wallet that falsely names our main wallet as owner | It can look like one of our agent wallets. | The app lists only the agent wallets that the main wallet recorded. | Other apps can still show the false wallet. |
 
 ## CROPS
 
@@ -684,7 +804,7 @@ risks move. This table lists them.
   are signing keys. Each proof signs one exact transaction. We trust the World ID protocol, the
   configured root publisher and the verifier contract. See the security model.
 
-## Agent wallets and human approval — built, not tested
+## Agent wallets and human approval
 
 The user's main WAVE wallet is the master of separate agent wallets. Each
 agent receives a spending limit per transfer and per day. The owner can
@@ -713,11 +833,11 @@ EIP-8141 transaction authorization.
 
 ## Demo (3 minutes)
 
-> **Demo-only settings:** adding a method takes the full delay, so the demo uses an account whose
-> passkey was enrolled before the demo. The demo account caps every delay at 2 minutes. The
-> address commits to that cap. The real delays are 24 hours to 7 days.
+> **Demo setting:** the demo uses a wallet with World ID and a passkey, ticked at creation, and a
+> 1 hour wait or no wait. The address commits to the wait.
 
-1. Show an account created with World ID only. Show that no seed phrase and no EOA key exist.
+1. Show the first screen and its tick boxes. Show a wallet with World ID. Show that no seed phrase
+   and no EOA key exist.
 2. Send a small transfer, approved in World App.
 3. Switch to the account with the pre-enrolled passkey. Show its rule: Face ID under 100 USDC,
    marked small, and World ID from 100 USDC.
@@ -767,9 +887,10 @@ We also select the EF CROPS track. EF places each project in at most one EF priz
 - **Success path and alternative paths:** see "Alternative paths we demo".
 - **Integration debrief:** see the end of this README.
 
-### World: World ID Agent Pass — built, not tested
+### World: World ID Agent Pass
 
-**Status: built, not tested.** No World ID login has completed through this flow.
+**Status: partly tested.** A real sandbox login approved a stand-in action. A real agent spend ran
+only with a local fake issuer. Sandbox identities are fake.
 
 - **Trust moment:** an agent asks to spend more than the owner allows it to spend alone.
 - **Credential:** a fresh Orb-class World ID login, with `max_age=0`, for one exact action.
@@ -825,7 +946,7 @@ virtual authenticator** sign with real P-256 math, but no device, face or finger
 - [x] Entry-point restriction in validation (allowed selectors only). *Test identity and software
       authenticator.*
 - [x] Delay queue: `schedule`, `approveRecovery`, `cancel`, `executeScheduled`. *Test identity and
-      software authenticator. Chain runs used demo delays. Forge tests check the real delay values.*
+      software authenticator. Chain runs used short waits. Forge tests check the real delay values.*
 - [x] Configuration version invalidates queued actions and collected approvals. *The chain run
       covers a queued action. A forge test covers collected approvals.*
 - [x] Owner-set spending rules: amount tiers, method per tier, delay per tier, period caps.
@@ -834,26 +955,44 @@ virtual authenticator** sign with real P-256 math, but no device, face or finger
       authenticator.*
 - [ ] Period limits are cumulative across batches. *Not tested: no test sends two transfers in
       one batch.*
-- [x] Stricter rules apply at once; looser rules need World ID and a 48-hour delay. *Test identity
-      and software authenticator. The chain run used a demo delay. A forge test checks 48 hours.*
+- [x] Stricter rules apply at once; looser rules need the owner method and the chosen wait. *Test
+      identity and software authenticator. The chain run used a short wait. A forge test checks 48
+      hours.*
+- [x] Hard daily limit: passkey and World ID both refused after the limit, a lower limit at once,
+      a higher limit through the owner method and the wait. *Test identity and software
+      authenticator, one chain case with a short wait. Forge tests check the 24 hour window, one
+      count for a queued transfer, ETH and tokens apart, and the real 48 hour delay. A virtual
+      authenticator run in Chromium checks the Send sheet and the Settings card.*
+- [ ] Hard daily limit on a real 24 hour window on the chain. *Not run: forge moves the clock.*
+- [ ] Hard daily limit on an agent wallet. *Not built in the app: nothing sets it there.*
+- [ ] Any mix of methods at creation, with an owner method by rank. *Built. Not tested.*
+- [ ] A wallet with no World ID deploys, sends and changes its config. *Built. Not tested.*
+- [ ] Spending limits on Settings and on the creation screen. *Built. Not tested.*
+- [ ] The address commits to the extra methods and first rules. A tampered setup is refused, and a
+      method cannot join after creation without the queue. *Built. e2e cases 20 and 21 did not run.*
+- [ ] An optional wait: no wait applies a loosen with one approval, and a 1 hour wait refuses an
+      early run. A tier delay stays. *Forge tests pass. The chain and the browser are not tested.*
+- [ ] A self-paid wallet with a setup on the devnet. *Not measured. On the devnet a new wallet holds
+      one method. e2e case 24 measures it, and that case did not run.*
 - [x] Attack demos: stolen passkey rejected; World ID change cancelled. *Test identity and virtual
       authenticator, in Chromium.*
 - [x] Fallback owner change with two distinct other methods. *Test identity and software
-      authenticator, with a demo delay. A forge test checks the distinct-method rule and 7 days.*
+      authenticator, with a short wait. A forge test checks the distinct-method rule and 7 days.*
 - [ ] Fallback root source change with two distinct other methods. *A forge test checks who can
       propose it. No test runs the full change.*
 - [ ] Whitechain merchant version
 - [x] Local gas sponsor: a wallet with 0 ETH sends transactions, and the gas station pays only with
       the sponsor signature. *Test identity and software authenticator. Local network only. The
       fee cap and the shape check ran in unit tests only.*
-- [ ] Agent wallets: the user creates a child wallet with the normal creation flow. *Not tested.
-      Compile only: no agent wallet ran on a chain.*
-- [ ] Agent wallets: the agent key and the spending tiers are enforced onchain. *Not tested.*
-- [ ] Agent wallets: revoke works at once, and only the master can administer the wallet.
-      *Not tested.*
-- [ ] Agent wallets use the local gas sponsor. *Not tested.*
+- [x] Agent wallets: the user creates a child wallet with the normal creation flow. *Local chain,
+      test identity.*
+- [x] Agent wallets: the agent key and the spending tiers are enforced onchain. *Local chain.*
+- [x] Agent wallets: revoke works at once, and only the master can administer the wallet.
+      *Local chain.*
+- [x] Agent wallets use the local gas sponsor. *Local chain.*
 - [ ] World ID Agent Pass: a fresh login approves one exact agent spend, and every refused path
-      leaves it not run. *Not tested. Compile only: no login has completed.*
+      leaves it not run. *Partly: a real sandbox login approved a stand-in action, and a real agent
+      spend ran only with a local fake issuer. Refused paths ran with that issuer.*
 - [ ] Demo approval success and cancellation with no payment
 
 ## Repository layout
@@ -864,7 +1003,8 @@ contracts/                        own package.json. Hardhat with the solc fork, 
     WaveAccount.sol               ERC-8286 account, contract-dispatched route, six entry points
     WavePolicy.sol                tiers, period counters, delay queue, recovery, configuration version
     WorldIDFrameValidator.sol     World ID 3.0 proof over sig_hash, root from an EIP-8272 reference
-    PasskeyFrameValidator.sol     WebAuthn P-256 assertion over sig_hash, with backup-flag check
+    PasskeyFrameValidator.sol     WebAuthn P-256 assertion over sig_hash, with backup-flag check.
+                                  The owner method of a wallet with no World ID.
     AgentKeyFrameValidator.sol    secp256k1 signature over sig_hash, for agent wallets only
     WaveAccountFactory.sol        CREATE2 clones with initial configuration in code
     WaveGasStation.sol            local gas sponsor: a paymaster that needs the sponsor signature
@@ -875,8 +1015,8 @@ contracts/                        own package.json. Hardhat with the solc fork, 
   test/WavePolicy.t.sol           forge tests for the policy
 devnet/                           the local stack: ethrex, Lighthouse, sidecar, explorer
 lib/                              frame builder, chain client, World ID, policy encoding
-lib/server/                       route logic: prepare, send, roots, activity, World ID config,
-                                  gas sponsor, agent wallets, Agent Pass
+lib/server/                       route logic: wallet plan, prepare, send, roots, activity,
+                                  World ID config, gas sponsor, agent wallets, Agent Pass
 app/                              web app and API route handlers. Pages: /, /settings, /agents
 components/                       web app components
 scripts/
@@ -967,7 +1107,7 @@ run with the test identity.
 | Variable | Default | What it does |
 |---|---|---|
 | `WAVE_NETWORK` | `local` | `local` is your own stack, with the gas sponsor. `devnet` is the public devnet, with no sponsor. |
-| `WAVE_DEMO_DELAY` | `120` | The delay cap for new wallets, in seconds. `0` means real delays. The address commits to it. |
+| `WAVE_DEMO_DELAY` | `120` | The wait for wallets from test scripts, in seconds. `0` means real delays. The app does not use it: the creation screen sets the wait. |
 | `WAVE_SPONSOR_DAILY_TX` | `50` | Sponsored transactions per wallet per day. The server enforces this. Local network only. |
 | `WAVE_ALLOW_LAN` | not set | `1` lets a phone on the LAN reach the local-only routes. |
 | `WAVE_DEV_KEY` | local dev key | A funded key for `devnet`. The local network does not need it. |
@@ -1049,9 +1189,10 @@ These are the last runs, on 2026-11-06, on the local stack.
 
 | Check | Command | Result |
 |---|---|---|
-| Policy unit tests | `forge test` in `contracts/` | 35 passed, 0 failed |
-| Checks with no chain | `npx tsx scripts/unit.ts` | 22 passed, 0 failed |
-| End-to-end cases on the chain | `npx tsx scripts/e2e.ts` | 15 of 15 passed, with the gas sponsor. Test identity, software authenticator. |
+| Policy unit tests | `forge test` in `contracts/` | 78 passed, 0 failed |
+| Checks with no chain | `npx tsx scripts/unit.ts` | 41 passed, 0 failed |
+| Hard daily limit on the chain | `E2E_ONLY=29 npx tsx scripts/e2e.ts` | 1 of 1 passed, with the gas sponsor. Test identity, software authenticator. |
+| End-to-end cases on the chain | `npx tsx scripts/e2e.ts` | 15 of 15 passed, with the gas sponsor. Test identity, software authenticator. This run came before the hard daily limit. |
 | API routes | `SMOKE_FULL=1 npx tsx scripts/api-smoke.ts` | 48 passed, 0 failed, with the gas sponsor |
 | Sponsor limits | `SMOKE_BUDGET=1 npx tsx scripts/api-smoke.ts`, server with `WAVE_SPONSOR_DAILY_TX=1` | 8 passed, 0 failed |
 | Browser journey, synced passkey | Chromium at 1280 px | 44 of 44 steps, with the gas sponsor. Test identity, virtual authenticator. |
