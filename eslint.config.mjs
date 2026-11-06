@@ -12,6 +12,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Separate packages with their own tooling.
+    "contracts/**",
+    "devnet/**",
   ]),
 ]);
 
