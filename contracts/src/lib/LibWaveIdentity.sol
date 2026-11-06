@@ -3,7 +3,7 @@ pragma solidity ^0.8.21;
 
 import {LibCloneConfig} from "./LibCloneConfig.sol";
 
-/// @notice The owner identity and the root source of an account.
+/// @notice The World ID owner and the root source of an account. A passkey owner does not use this.
 /// The clone args hold the initial values. Storage overrides them. Zero in storage means
 /// "use the clone args". The account writes here. The World ID validator reads here by
 /// DELEGATECALL, so every read stays in the sender's storage.
