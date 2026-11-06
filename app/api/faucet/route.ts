@@ -1,7 +1,7 @@
 import { encodeFunctionData, type Hex } from "viem";
 import type { FaucetRequest, FaucetResponse } from "@/lib/api-types";
 import { ETH_TOKEN } from "@/lib/api-types";
-import { LEGACY_TX, devWallet, publicClient } from "@/lib/chain";
+import { LEGACY_TX, devWallet, publicClient, sponsorOf } from "@/lib/chain";
 import { ApiFailure, asAddress, deployment, readBody, requireLocal, route } from "@/lib/server/http";
 import { withDevKey } from "@/lib/server/roots";
 import { TestUSDCAbi } from "@/lib/wave-abi";
@@ -26,23 +26,27 @@ async function mined(hash: Hex): Promise<Hex> {
   return hash;
 }
 
-async function fund(address: `0x${string}`, testUsdc: `0x${string}`): Promise<Hex[]> {
+/** A sponsored wallet needs no ETH, so it gets test USDC only. */
+async function fund(address: `0x${string}`, testUsdc: `0x${string}`, withEth: boolean): Promise<Hex[]> {
   return withDevKey(async () => {
-    const eth = await devWallet.sendTransaction({
-      to: address,
-      value: ETH_AMOUNT,
-      gas: FUND_GAS,
-      ...LEGACY_TX,
-    });
-    await mined(eth);
+    const hashes: Hex[] = [];
+    if (withEth) {
+      const eth = await devWallet.sendTransaction({
+        to: address,
+        value: ETH_AMOUNT,
+        gas: FUND_GAS,
+        ...LEGACY_TX,
+      });
+      hashes.push(await mined(eth));
+    }
     const usdc = await devWallet.sendTransaction({
       to: testUsdc,
       data: encodeFunctionData({ abi: TestUSDCAbi, functionName: "mint", args: [address, USDC_AMOUNT] }),
       gas: MINT_GAS,
       ...LEGACY_TX,
     });
-    await mined(usdc);
-    return [eth, usdc];
+    hashes.push(await mined(usdc));
+    return hashes;
   });
 }
 
@@ -65,12 +69,13 @@ export const POST = route(async (request): Promise<FaucetResponse> => {
     if (left < KEY_RESERVE + ETH_AMOUNT) {
       throw new ApiFailure("FAUCET_EMPTY", "The faucet keeps its last ETH for root publishing.", 503);
     }
-    const txHashes = await fund(address, d.testUsdc);
+    const withEth = sponsorOf(d) === null;
+    const txHashes = await fund(address, d.testUsdc, withEth);
     state.lastAt.set(key, Date.now());
     return {
       txHashes,
       funded: [
-        { token: ETH_TOKEN, amount: ETH_AMOUNT.toString() },
+        ...(withEth ? [{ token: ETH_TOKEN, amount: ETH_AMOUNT.toString() }] : []),
         { token: d.testUsdc, amount: USDC_AMOUNT.toString() },
       ],
     };

@@ -84,6 +84,8 @@ export function WalletCard({ onSend }: { onSend: () => void }) {
             ? account.balances.map((balance) => {
                 const token = tokenBy(balance.token);
                 if (!token) return null;
+                // A sponsored wallet pays no gas, so ETH does not matter there.
+                if (info?.gasSponsored && token.symbol === "ETH") return null;
                 return (
                   <div key={balance.token} className="flex items-baseline justify-between gap-3">
                     <dt className="text-sm text-white/70">
@@ -124,9 +126,11 @@ export function WalletCard({ onSend }: { onSend: () => void }) {
           The wallet pays its own gas. Use Fund first. Test funds only.
         </Notice>
       ) : null}
-      {account && account.demoDelay > 0 ? (
+      {account && account.waitSeconds !== null ? (
         <p className="text-center text-xs text-muted-foreground">
-          Demo delay: {formatDuration(account.demoDelay).toLowerCase()} (real: 24 hours to 7 days)
+          {account.waitSeconds === 0
+            ? "No wait. A stolen owner method can change rules and spend at once."
+            : `Wait before risky changes: ${formatDuration(account.waitSeconds).toLowerCase()}`}
         </p>
       ) : null}
       {error ? <Notice tone="danger" title="The faucet failed">{error}</Notice> : null}
