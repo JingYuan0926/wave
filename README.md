@@ -938,11 +938,13 @@ We also select the EF CROPS track. EF places each project in at most one EF priz
 
 ### World: World ID Agent Pass
 
-**Status: partly tested.** A real sandbox login approved a stand-in action. A real agent spend ran
-only with a local fake issuer. Sandbox identities are fake.
+**Status: partly tested.** A real sandbox login approved a stand-in action in the browser flow. A
+real device start ran against the sandbox, but no person finished a device login. A real agent spend
+ran only with a local fake issuer. Sandbox identities are fake.
 
 - **Trust moment:** an agent asks to spend more than the owner allows it to spend alone.
-- **Credential:** a fresh Orb-class World ID login, with `max_age=0`, for one exact action.
+- **Credential:** a fresh Orb-class World ID login in the device flow, then a confirmation of one
+  exact action in WAVE.
 - **Enforcement:** the backend enforces this check, not the contract. See
   [Human approval with World ID Agent Pass](#human-approval-with-world-id-agent-pass).
 - This replaces the earlier AgentKit plan. WAVE has no AgentKit code, no AgentBook and no contract
@@ -1013,7 +1015,8 @@ virtual authenticator** sign with real P-256 math, but no device, face or finger
       count for a queued transfer, ETH and tokens apart, and the real 48 hour delay. A virtual
       authenticator run in Chromium checks the Send sheet and the Settings card.*
 - [ ] Hard daily limit on a real 24 hour window on the chain. *Not run: forge moves the clock.*
-- [ ] Hard daily limit on an agent wallet. *Not built in the app: nothing sets it there.*
+- [ ] The wallet-wide hard daily limit on an agent wallet. *Not built in the app: nothing sets it
+      there. An agent uses its tier cap for the most per day. See the agent items below.*
 - [ ] Any mix of methods at creation, with an owner method by rank. *Built. Not tested.*
 - [ ] A wallet with no World ID deploys, sends and changes its config. *Built. Not tested.*
 - [ ] Spending limits on Settings and on the creation screen. *Built. Not tested.*
@@ -1039,9 +1042,22 @@ virtual authenticator** sign with real P-256 math, but no device, face or finger
 - [x] Agent wallets: revoke works at once, and only the master can administer the wallet.
       *Local chain.*
 - [x] Agent wallets use the local gas sponsor. *Local chain.*
+- [x] Agent limits: two fields on the create form and in the Limits sheet. Below the alone amount
+      the agent sends. Above it a human approves. Above the most per day the chain refuses, and no
+      approval is offered. *Local chain, Chromium, test identity, local fake issuer. Phone and
+      desktop screenshots checked.*
+- [x] An older agent shape converts with one Save, through the owner method and the wallet's wait.
+      The old limit holds during the wait. *Local chain, a 5 second wait, test identity.*
+- [x] MCP tools over stdio: `get_balance`, `get_limits`, `send_payment`, `check_approval`. A retry
+      and two calls at once with one clientRef send once. No tool output holds a key, secret, token
+      or device code. *Real MCP client, local chain, local fake issuer.*
+- [x] Confirm on `/agents` runs once. No token, a wrong token, a wrong Origin and a tunnel host are
+      refused. Denied, expired, wrong person, paused and revoked all send nothing. *Local chain,
+      Chromium, local fake issuer. Sec-Fetch headers came from a script for the refused calls.*
 - [ ] World ID Agent Pass: a fresh login approves one exact agent spend, and every refused path
       leaves it not run. *Partly: a real sandbox login approved a stand-in action, and a real agent
-      spend ran only with a local fake issuer. Refused paths ran with that issuer.*
+      spend ran only with a local fake issuer. That issuer is not World. Refused paths ran with that
+      issuer.*
 - [ ] Demo approval success and cancellation with no payment
 
 ## Repository layout
