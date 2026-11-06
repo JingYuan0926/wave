@@ -186,7 +186,7 @@ export function Avatar({ name, size = "md" }: { name: string; size?: "md" | "lg"
 
 export function MethodChip({ method, label }: { method: MethodId; label?: string }) {
   const Icon = METHOD_ICON[method];
-  const names: Record<MethodId, string> = { worldid: "World ID", faceid: "Face ID", nfc: "NFC card" };
+  const names: Record<MethodId, string> = { worldid: "World ID", faceid: "Passkey", nfc: "NFC card" };
   return (
     <span className="inline-flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-white px-2.5 text-[13px] font-semibold text-ink-2 ring-1 ring-line">
       <Icon className="size-3.5 shrink-0" aria-hidden />
@@ -305,7 +305,7 @@ export function WaveMark({ className = "" }: { className?: string }) {
   );
 }
 
-const TOKEN_ICON: Record<Token, string> = { USDC: usdcIcon, USDT: usdtIcon };
+const TOKEN_ICON: Record<Token, string> = { USDC: usdcIcon, USDT: usdtIcon, tUSDT: usdtIcon };
 
 export function TokenIcon({ token, size = "md" }: { token: Token; size?: "md" | "sm" }) {
   return (

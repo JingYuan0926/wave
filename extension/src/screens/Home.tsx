@@ -1,42 +1,20 @@
-import { useEffect, useRef, useState } from "react";
-import {
-  Bot,
-  ChartNoAxesColumn,
-  Eye,
-  EyeOff,
-  Gauge,
-  Hourglass,
-  Landmark,
-  LifeBuoy,
-  List,
-  Plus,
-  ScanFace,
-  ScanLine,
-  Settings2,
-  ShieldPlus,
-  X,
-} from "lucide-react";
-import { METHOD_INFO } from "../data";
+import { ChartNoAxesColumn, Eye, EyeOff, Gauge, Hourglass, Landmark, List, Plus, RefreshCw, ScanFace, ScanLine, TriangleAlert } from "lucide-react";
+import { METHOD_INFO, TOKEN_ORDER } from "../data";
 import { fmtToken, fmtUsd } from "../lib/format";
-import { agentToCard, methodToCard } from "../lib/cards";
+import { methodToCard } from "../lib/cards";
+import { NETWORK_NAME } from "../lib/wc/config";
 import { useNow, useStore } from "../store";
 import type { Nav } from "../nav";
-import { IconButton, ListRow, Pill, PrimaryButton, SectionHeader, SubHeading, TokenIcon, TopBar, focusRing } from "../components/ui";
+import { IconButton, ListRow, Pill, SectionHeader, SubHeading, TokenIcon, TopBar, focusRing } from "../components/ui";
 import { TxRow } from "../components/TxRow";
 import { CardHolder, HolderChip, HolderRow, HolderTitle, cardCountLabel } from "../components/CardHolder";
 
 export function Home({ nav }: { nav: Nav }) {
-  const { state, toggleHide, dismissPromo } = useStore();
+  const { state, toggleHide, refresh } = useStore();
   const now = useNow(60_000);
-  // Both tokens are dollar stablecoins, so the total is their sum.
-  const total = state.wallet.balances.USDC + state.wallet.balances.USDT;
-
-  // Recovery needs two methods besides World ID.
-  const backups = state.cards.filter((c) => c.kind !== "worldid" && c.activeAt <= now).length;
-  const backupsPending = state.cards.filter((c) => c.kind !== "worldid" && c.activeAt > now).length;
-  const activeMethodNames = state.cards
-    .filter((c) => c.activeAt <= now)
-    .map((c) => METHOD_INFO[c.kind].name.replace(" passkey", ""));
+  // All three tokens are dollar stablecoins (tUSDT is a test dollar), so the total is their sum.
+  const total = TOKEN_ORDER.reduce((n, t) => n + state.wallet.balances[t], 0);
+  const activeMethodNames = state.cards.filter((c) => c.activeAt <= now).map((c) => METHOD_INFO[c.kind].name);
 
   return (
     <>
@@ -55,10 +33,25 @@ export function Home({ nav }: { nav: Nav }) {
         }
       />
 
+      {state.error && (
+        <div className="mx-5 mb-3 flex items-start gap-3 rounded-[20px] bg-danger-soft p-3.5" role="alert">
+          <TriangleAlert className="mt-0.5 size-5 shrink-0 text-danger" aria-hidden />
+          <p className="min-w-0 flex-1 text-sm leading-snug text-ink">Could not read {NETWORK_NAME}: {state.error}</p>
+          <button
+            type="button"
+            onClick={refresh}
+            aria-label="Try again"
+            className={`grid size-8 shrink-0 place-items-center rounded-full bg-white/70 hover:bg-white ${focusRing}`}
+          >
+            <RefreshCw className="size-4" aria-hidden />
+          </button>
+        </div>
+      )}
+
       {/* Balance */}
       <section className="px-5" aria-labelledby="balance-label">
         <p id="balance-label" className="text-[15px] text-ink-2">
-          Total balance
+          Total balance · {NETWORK_NAME}
         </p>
         <div className="mt-0.5 flex items-center gap-1">
           <p className="mr-2 text-[2rem] font-bold tabular-nums tracking-tight">
@@ -82,7 +75,6 @@ export function Home({ nav }: { nav: Nav }) {
           [
             ["Send", () => nav.openSheet({ type: "send" })],
             ["Add money", () => nav.openSheet({ type: "receive" })],
-            ["Request", () => nav.openSheet({ type: "receive" })],
           ] as const
         ).map(([label, fn]) => (
           <button
@@ -96,36 +88,7 @@ export function Home({ nav }: { nav: Nav }) {
         ))}
       </div>
 
-      <HolderCarousel nav={nav} />
-
-      {!state.promoDismissed && backups + backupsPending < 2 && (
-        <section className="relative mx-5 mt-6 rounded-[24px] bg-wave-mist p-5" aria-labelledby="promo-title">
-          <button
-            type="button"
-            onClick={dismissPromo}
-            aria-label="Dismiss"
-            className={`absolute right-3 top-3 grid size-9 place-items-center rounded-full bg-white/70 hover:bg-white ${focusRing}`}
-          >
-            <X className="size-4" aria-hidden />
-          </button>
-          <div className="flex gap-4 pr-6">
-            <span className="grid size-12 shrink-0 place-items-center rounded-full border border-ink/15 bg-white/60" aria-hidden>
-              <ShieldPlus className="size-[22px]" strokeWidth={1.8} />
-            </span>
-            <div>
-              <h2 id="promo-title" className="text-[17px] font-bold">
-                Get recovery ready
-              </h2>
-              <p className="mt-1 text-[15px] leading-snug text-ink-2">
-                If you lose World ID, two other methods can recover your wallet. You have {backups + backupsPending}.
-              </p>
-            </div>
-          </div>
-          <div className="mt-4">
-            <PrimaryButton onClick={() => nav.openSheet({ type: "createCard" })}>Add a backup method</PrimaryButton>
-          </div>
-        </section>
-      )}
+      <WalletHolder nav={nav} />
 
       {/* Transactions */}
       <section className="mt-8" aria-labelledby="tx-title">
@@ -166,12 +129,6 @@ export function Home({ nav }: { nav: Nav }) {
             hint={state.pending.length ? `${state.pending.length} waiting in the delay queue` : "Nothing waiting"}
             onClick={() => nav.goTab("payments")}
           />
-          <ListRow
-            icon={LifeBuoy}
-            label="Recovery"
-            hint={backups >= 2 ? "Ready" : `Not ready · ${backups} of 2 backup methods`}
-            onClick={() => nav.openSub("methods")}
-          />
           <ListRow icon={Landmark} label="Account details" onClick={() => nav.openSub("account")} />
         </div>
       </section>
@@ -179,105 +136,37 @@ export function Home({ nav }: { nav: Nav }) {
   );
 }
 
-function HolderCarousel({ nav }: { nav: Nav }) {
+/** The wallet holder. Its cards are the approval methods; on Whitechain that is the owner passkey. */
+function WalletHolder({ nav }: { nav: Nav }) {
   const { state } = useStore();
   const now = useNow(60_000);
-  const ref = useRef<HTMLDivElement>(null);
-  const [index, setIndex] = useState(0);
-
-  const step = () => {
-    const first = ref.current?.firstElementChild as HTMLElement | null;
-    return first ? first.offsetWidth + 12 : 1;
-  };
-  const onScroll = () => {
-    if (ref.current) setIndex(Math.round(ref.current.scrollLeft / step()));
-  };
-
-  // When a card is added, slide the carousel to the holder it went into.
-  const { newCardId } = state;
-  const isAgentCard = state.agents.some((a) => a.id === newCardId);
-  useEffect(() => {
-    if (!newCardId) return;
-    ref.current?.scrollTo({ left: (isAgentCard ? 1 : 0) * step(), behavior: "smooth" });
-  }, [newCardId, isAgentCard]);
-
   const methodCards = state.cards.map((c) => methodToCard(c, now));
-  const agentCards = state.agents.map(agentToCard);
-  const activeAgents = state.agents.filter((a) => a.active);
-  const agentSpend = activeAgents.reduce((n, a) => n + a.used, 0);
 
   return (
-    <div className="mt-5">
-      <div ref={ref} onScroll={onScroll} className="no-scrollbar flex snap-x snap-mandatory gap-3 overflow-x-auto scroll-px-5 px-5">
-        {/* Holder 1: the wallet. Its cards are your approval methods. */}
-        <div className="w-[86%] shrink-0 snap-start">
-          <CardHolder
-            ariaLabel={state.wallet.name}
-            cards={methodCards}
-            frontLabel={cardCountLabel(methodCards.length, "method")}
-            emptyLabel="Add an approval method"
-            newCardId={newCardId}
-            onOpenCards={() => nav.openSheet({ type: "cards", holder: "methods" })}
-            onCreate={() => nav.openSheet({ type: "createCard" })}
-          >
-            <HolderTitle onClick={() => nav.openSub("account")}>{state.wallet.name}</HolderTitle>
-            <ul className="mt-3">
-              {(["USDC", "USDT"] as const).map((t) => (
-                <li key={t}>
-                  <HolderRow lead={<TokenIcon token={t} />} onClick={() => nav.openSub("account")}>
-                    {state.hideBalance ? "••••" : fmtToken(state.wallet.balances[t], t)}
-                  </HolderRow>
-                </li>
-              ))}
-            </ul>
-            <HolderChip icon={Landmark} onClick={() => nav.openSub("account")}>
-              Account details
-            </HolderChip>
-          </CardHolder>
-        </div>
-
-        {/* Holder 2: agent budgets. Each card is one agent's spending budget. */}
-        <div className="w-[86%] shrink-0 snap-start">
-          <CardHolder
-            ariaLabel="Agent budgets"
-            cards={agentCards}
-            frontLabel={cardCountLabel(agentCards.length, "budget")}
-            emptyLabel="Give an agent a budget"
-            newCardId={newCardId}
-            onOpenCards={() => nav.openSheet({ type: "cards", holder: "agents" })}
-            onCreate={() => nav.openSheet({ type: "addAgent" })}
-          >
-            <HolderTitle onClick={() => nav.goTab("agents")}>Agent budgets</HolderTitle>
-            <ul className="mt-3">
-              <li>
-                <HolderRow
-                  lead={
-                    <span className="grid size-8 place-items-center rounded-full bg-wave text-ink" aria-hidden>
-                      <Bot className="size-4" />
-                    </span>
-                  }
-                  onClick={() => nav.goTab("agents")}
-                >
-                  {activeAgents.length} active {activeAgents.length === 1 ? "agent" : "agents"}
-                </HolderRow>
-              </li>
-              <li>
-                <HolderRow lead={<TokenIcon token="USDC" />} onClick={() => nav.goTab("agents")}>
-                  {state.hideBalance ? "••••" : `${fmtToken(agentSpend, "USDC")} spent`}
-                </HolderRow>
-              </li>
-            </ul>
-            <HolderChip icon={Settings2} onClick={() => nav.goTab("agents")}>
-              Manage agents
-            </HolderChip>
-          </CardHolder>
-        </div>
-      </div>
-      <div className="mt-3 flex justify-center gap-1.5" aria-hidden>
-        {[0, 1].map((i) => (
-          <span key={i} className={`size-2 rounded-full transition-colors ${i === index ? "bg-ink" : "bg-line"}`} />
-        ))}
-      </div>
+    <div className="mt-5 px-5">
+      <CardHolder
+        ariaLabel={state.wallet.name}
+        cards={methodCards}
+        frontLabel={cardCountLabel(methodCards.length, "method")}
+        emptyLabel="Add an approval method"
+        newCardId={state.newCardId}
+        onOpenCards={() => nav.openSheet({ type: "cards", holder: "methods" })}
+        onCreate={() => nav.openSheet({ type: "createCard" })}
+      >
+        <HolderTitle onClick={() => nav.openSub("account")}>{state.wallet.name}</HolderTitle>
+        <ul className="mt-3">
+          {TOKEN_ORDER.map((t) => (
+            <li key={t}>
+              <HolderRow lead={<TokenIcon token={t} />} onClick={() => nav.openSub("account")}>
+                {state.hideBalance ? "••••" : fmtToken(state.wallet.balances[t], t)}
+              </HolderRow>
+            </li>
+          ))}
+        </ul>
+        <HolderChip icon={Landmark} onClick={() => nav.openSub("account")}>
+          Account details
+        </HolderChip>
+      </CardHolder>
     </div>
   );
 }

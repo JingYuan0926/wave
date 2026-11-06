@@ -38,7 +38,7 @@ export function Recipients({ nav }: { nav: Nav }) {
             id="recipient-search"
             type="search"
             autoComplete="off"
-            placeholder="Name, ENS or address"
+            placeholder="Name or address"
             value={q}
             onChange={(e) => setQ(e.target.value)}
             className="h-12 w-full rounded-full bg-surface pl-12 pr-12 text-base outline-none ring-wave-deep placeholder:text-muted focus-visible:ring-2"
@@ -57,13 +57,15 @@ export function Recipients({ nav }: { nav: Nav }) {
       </div>
 
       <h2 className="mx-5 mt-6 border-b border-line pb-3 text-[15px] font-medium text-ink-2">
-        {query ? `${list.length} result${list.length === 1 ? "" : "s"}` : "Everyone you've paid"}
+        {query ? `${list.length} result${list.length === 1 ? "" : "s"}` : "Saved recipients"}
       </h2>
 
       {list.length === 0 ? (
         <div className="px-5 py-10 text-center">
-          <p className="font-semibold">No one matches “{q}”</p>
-          <p className="mt-1 text-sm text-muted">Check the spelling, or add them as a new recipient.</p>
+          <p className="font-semibold">{query ? `No one matches “${q}”` : "No recipients yet"}</p>
+          <p className="mt-1 text-sm text-muted">
+            {query ? "Check the spelling, or add them as a new recipient." : "Save a Whitechain address to pay it in one tap."}
+          </p>
           <button
             type="button"
             onClick={() => nav.openSheet({ type: "addRecipient" })}

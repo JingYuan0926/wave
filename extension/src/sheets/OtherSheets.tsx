@@ -3,28 +3,35 @@ import {
   Bot,
   Check,
   Copy,
-  CreditCard,
+  Droplets,
+  ExternalLink,
   Gauge,
   Plus,
   ScanFace,
   ScanLine,
   Send,
+  TriangleAlert,
   Users,
   type LucideIcon,
 } from "lucide-react";
+import type { Address } from "viem";
 import { METHOD_LABEL, type MethodId } from "../data";
-import { requestApproval } from "../lib/approvals";
+import { NETWORK_NAME } from "../lib/wc/config";
+import { cancelPending, claimTestTokens, type SendResult } from "../lib/wc/wallet";
 import { useStore } from "../store";
 import type { Nav } from "../nav";
 import { METHOD_ICON, PrimaryButton, Sheet, focusRing } from "../components/ui";
 import { ApprovingView, DoneView } from "../components/Approving";
 
-/* ---------- Receive (Add money / Request) ---------- */
+/* ---------- Receive (Add money) ---------- */
 
 export function ReceiveSheet({ onClose }: { onClose: () => void }) {
-  const { state } = useStore();
+  const { state, refresh } = useStore();
   const address = state.wallet.address;
   const [copied, setCopied] = useState(false);
+  const [faucet, setFaucet] = useState<{ state: "idle" | "busy" | "done" | "error"; text?: string; href?: string }>({
+    state: "idle",
+  });
 
   const copy = async () => {
     try {
@@ -36,19 +43,48 @@ export function ReceiveSheet({ onClose }: { onClose: () => void }) {
     }
   };
 
+  const claim = async () => {
+    setFaucet({ state: "busy" });
+    try {
+      const r = await claimTestTokens(address as Address);
+      setFaucet({ state: "done", text: `${r.amount} tUSDT minted to your wallet.`, href: r.explorerUrl });
+      refresh();
+    } catch (e) {
+      setFaucet({ state: "error", text: e instanceof Error ? e.message : String(e) });
+    }
+  };
+
   return (
-    <Sheet title="Receive money" onClose={onClose}>
-      <p className="text-[15px] leading-relaxed text-ink-2">Send USDC or USDT on the WAVE devnet to this address.</p>
+    <Sheet title="Add money" onClose={onClose}>
+      <p className="text-[15px] leading-relaxed text-ink-2">
+        Send USDT, USDC.e or tUSDT on <span className="font-semibold text-ink">{NETWORK_NAME}</span> to this address. Your
+        wallet needs no WBT: WAVE pays the gas.
+      </p>
       <div className="mt-4 rounded-[24px] bg-surface p-5">
         <p className="text-sm text-muted">{state.wallet.name}</p>
-        <p className="mt-1 break-all font-mono text-lg leading-relaxed">{address}</p>
+        <p className="mt-1 break-all font-mono text-lg leading-relaxed">{address || "…"}</p>
       </div>
-      <div className="mt-5">
-        <PrimaryButton onClick={copy}>
+      <div className="mt-5 space-y-2">
+        <PrimaryButton onClick={copy} disabled={!address}>
           {copied ? <Check className="size-5" aria-hidden /> : <Copy className="size-5" aria-hidden />}
           <span aria-live="polite">{copied ? "Copied" : "Copy address"}</span>
         </PrimaryButton>
+        <PrimaryButton tone="ghost" onClick={claim} disabled={!address || faucet.state === "busy"}>
+          <Droplets className="size-5" aria-hidden />
+          {faucet.state === "busy" ? "Minting…" : "Get 500 test tUSDT"}
+        </PrimaryButton>
       </div>
+      {faucet.text && (
+        <p role="status" className={`mt-3 text-sm leading-snug ${faucet.state === "error" ? "font-semibold text-danger" : "text-ink-2"}`}>
+          {faucet.text}{" "}
+          {faucet.href && (
+            <a href={faucet.href} target="_blank" rel="noopener noreferrer" className="font-semibold underline underline-offset-2">
+              View transaction
+            </a>
+          )}
+        </p>
+      )}
+      <p className="mt-3 text-xs leading-snug text-muted">tUSDT is WAVE's test token with an open mint. It has no value.</p>
     </Sheet>
   );
 }
@@ -68,11 +104,11 @@ export function ScanSheet({ onClose, onPayRecipient }: { onClose: () => void; on
         ))}
       </div>
       <p className="mt-5 text-center text-[15px] leading-relaxed text-ink-2">
-        Scan a WAVE or Ethereum payment QR code. Camera scanning comes in the next build.
+        Camera scanning comes in the next build. For now, pay a saved recipient or paste an address.
       </p>
       <div className="mt-5">
         <PrimaryButton tone="ghost" onClick={onPayRecipient}>
-          Pay a recipient instead
+          Send to an address instead
         </PrimaryButton>
       </div>
     </Sheet>
@@ -84,7 +120,6 @@ export function ScanSheet({ onClose, onPayRecipient }: { onClose: () => void; on
 export function MoreSheet({ onClose, nav }: { onClose: () => void; nav: Nav }) {
   const items: [string, LucideIcon, () => void][] = [
     ["Send", Send, () => nav.openSheet({ type: "send" })],
-    ["Add method", CreditCard, () => nav.openSheet({ type: "createCard" })],
     ["Add money", Plus, () => nav.openSheet({ type: "receive" })],
     ["Scan", ScanLine, () => nav.openSheet({ type: "scan" })],
     ["Recipients", Users, () => nav.goTab("recipients")],
@@ -160,17 +195,12 @@ export function AddRecipientSheet({ onClose }: { onClose: () => void }) {
     e.preventDefault();
     const next: typeof errors = {};
     const addr = address.trim();
-    const isEns = /^[a-z0-9-]+(\.[a-z0-9-]+)*\.eth$/i.test(addr);
-    const isHex = /^0x[a-fA-F0-9]{40}$/.test(addr);
+    // Whitechain has no ENS, so a recipient is a 0x address.
     if (!name.trim()) next.name = "Enter a name";
-    if (!isEns && !isHex) next.address = "Enter a 0x address (42 characters) or an ENS name";
+    if (!/^0x[a-fA-F0-9]{40}$/.test(addr)) next.address = "Enter a 0x address (42 characters)";
     setErrors(next);
     if (Object.keys(next).length) return;
-    addRecipient({
-      name: name.trim(),
-      handle: isEns ? addr.toLowerCase() : undefined,
-      address: isHex ? addr : "0x0000000000000000000000000000000000000000",
-    });
+    addRecipient({ name: name.trim(), address: addr });
     onClose();
   };
 
@@ -180,13 +210,13 @@ export function AddRecipientSheet({ onClose }: { onClose: () => void }) {
         <Field id="rec-name" label="Name" autoComplete="name" value={name} onChange={(e) => setName(e.target.value)} error={errors.name} placeholder="Ananya Rao" />
         <Field
           id="rec-address"
-          label="Address or ENS"
+          label="Whitechain address"
           autoComplete="off"
           spellCheck={false}
           value={address}
           onChange={(e) => setAddress(e.target.value)}
           error={errors.address}
-          placeholder="0x… or name.eth"
+          placeholder="0x…"
           className="font-mono"
         />
         <div className="pt-2">
@@ -200,65 +230,28 @@ export function AddRecipientSheet({ onClose }: { onClose: () => void }) {
 /* ---------- Add agent ---------- */
 
 export function AddAgentSheet({ onClose }: { onClose: () => void }) {
-  const { addAgent } = useStore();
-  const [name, setName] = useState("");
-  const [purpose, setPurpose] = useState("");
-  const [limit, setLimit] = useState("");
-  const [per, setPer] = useState<"day" | "week" | "month">("week");
-  const [errors, setErrors] = useState<{ name?: string; limit?: string }>({});
-
-  const submit = (e: FormEvent) => {
-    e.preventDefault();
-    const next: typeof errors = {};
-    const n = Number.parseFloat(limit);
-    if (!name.trim()) next.name = "Give the agent a name";
-    if (!(n > 0)) next.limit = "Enter a budget above 0";
-    setErrors(next);
-    if (Object.keys(next).length) return;
-    addAgent({ name: name.trim(), purpose: purpose.trim() || "No description", limit: n, per, used: 0, active: true });
-    onClose();
-  };
-
   return (
-    <Sheet title="New agent budget" onClose={onClose}>
-      <form onSubmit={submit} noValidate className="space-y-4">
-        <Field id="agent-name" label="Agent name" autoComplete="off" value={name} onChange={(e) => setName(e.target.value)} error={errors.name} placeholder="Coffee runner" />
-        <Field id="agent-purpose" label="What it pays for (optional)" autoComplete="off" value={purpose} onChange={(e) => setPurpose(e.target.value)} placeholder="Morning coffee orders" />
-        <Field
-          id="agent-limit"
-          label="Budget in USDC"
-          inputMode="decimal"
-          autoComplete="off"
-          value={limit}
-          onChange={(e) => /^\d*\.?\d{0,2}$/.test(e.target.value) && setLimit(e.target.value)}
-          error={errors.limit}
-          placeholder="50"
-        />
-        <fieldset>
-          <legend className="text-[15px] font-medium text-ink-2">Resets every</legend>
-          <div className="mt-2 inline-flex rounded-full bg-surface p-1">
-            {(["day", "week", "month"] as const).map((p) => (
-              <button
-                key={p}
-                type="button"
-                aria-pressed={per === p}
-                onClick={() => setPer(p)}
-                className={`h-10 rounded-full px-4 text-[15px] font-semibold capitalize ${per === p ? "bg-white shadow-sm" : "text-ink-2"} ${focusRing}`}
-              >
-                {p}
-              </button>
-            ))}
-          </div>
-        </fieldset>
-        <div className="pt-2">
-          <PrimaryButton type="submit">Create budget</PrimaryButton>
-        </div>
-      </form>
+    <Sheet title="Agent budgets" onClose={onClose}>
+      <NotOnWhitechain>
+        Agent wallets run on the WAVE frame-transaction network. They are not on Whitechain yet.
+      </NotOnWhitechain>
+      <div className="mt-5">
+        <PrimaryButton onClick={onClose}>OK</PrimaryButton>
+      </div>
     </Sheet>
   );
 }
 
-/* ---------- Approval-gated actions (cancel, add method) ---------- */
+export function NotOnWhitechain({ children }: { children: string }) {
+  return (
+    <div className="flex gap-3 rounded-[20px] bg-wave-mist p-4">
+      <Bot className="mt-0.5 size-5 shrink-0 text-wave-deep" aria-hidden />
+      <p className="text-sm leading-snug text-ink-2">{children}</p>
+    </div>
+  );
+}
+
+/* ---------- Approval-gated actions (cancel) ---------- */
 
 function ApprovalSheet({
   title,
@@ -266,7 +259,7 @@ function ApprovalSheet({
   methods,
   doneTitle,
   doneBody,
-  onApproved,
+  run,
   onClose,
 }: {
   title: string;
@@ -274,18 +267,27 @@ function ApprovalSheet({
   methods: MethodId[];
   doneTitle: string;
   doneBody: string;
-  onApproved: (m: MethodId) => void;
+  run: (m: MethodId) => Promise<SendResult>;
   onClose: () => void;
 }) {
-  const [step, setStep] = useState<"choose" | "approving" | "done">("choose");
+  const [step, setStep] = useState<"choose" | "approving" | "done" | "error">("choose");
   const [method, setMethod] = useState<MethodId>(methods[0]);
+  const [result, setResult] = useState<SendResult | null>(null);
+  const [error, setError] = useState("");
 
   const go = async (m: MethodId) => {
     setMethod(m);
     setStep("approving");
-    await requestApproval(m);
-    onApproved(m);
-    setStep("done");
+    try {
+      const r = await run(m);
+      if (!r.success) throw new Error("The transaction ran, but the wallet refused the action.");
+      setResult(r);
+      setStep("done");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(/NotAllowedError|aborted|cancel/i.test(msg) ? "The passkey prompt was closed. Nothing changed." : msg);
+      setStep("error");
+    }
   };
 
   return (
@@ -306,26 +308,58 @@ function ApprovalSheet({
         </>
       )}
       {step === "approving" && <ApprovingView method={method} />}
-      {step === "done" && <DoneView title={doneTitle} body={doneBody} onDone={onClose} />}
+      {step === "done" && (
+        <>
+          <DoneView title={doneTitle} body={doneBody} onDone={onClose} />
+          {result && (
+            <a
+              href={result.explorerUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={`mt-3 flex h-11 items-center justify-center gap-2 rounded-full text-[15px] font-semibold text-ink-2 hover:bg-surface ${focusRing}`}
+            >
+              View on Whitechain explorer <ExternalLink className="size-4" aria-hidden />
+            </a>
+          )}
+        </>
+      )}
+      {step === "error" && (
+        <div>
+          <div className="flex gap-3 rounded-[20px] bg-danger-soft p-4" role="alert">
+            <TriangleAlert className="mt-0.5 size-5 shrink-0 text-danger" aria-hidden />
+            <p className="text-sm leading-snug text-ink">{error}</p>
+          </div>
+          <div className="mt-5 space-y-2">
+            <PrimaryButton onClick={() => go(method)}>Try again</PrimaryButton>
+            <PrimaryButton tone="ghost" onClick={onClose}>
+              Close
+            </PrimaryButton>
+          </div>
+        </div>
+      )}
     </Sheet>
   );
 }
 
 export function CancelSheet({ pendingId, onClose }: { pendingId: string; onClose: () => void }) {
-  const { state, removePending, addTx, removeCard } = useStore();
+  const { state, removePending, refresh } = useStore();
   const [p] = useState(() => state.pending.find((x) => x.id === pendingId));
-  if (!p) return null;
+  if (!p || !state.passkey) return null;
+  const passkey = state.passkey;
   return (
     <ApprovalSheet
       title="Cancel this action?"
-      description={`“${p.title}” will not run. ${p.cancelBy.length > 1 ? "Any of your methods can cancel it." : "Only World ID can cancel it."}`}
-      methods={p.cancelBy.includes("faceid") ? ["faceid", "worldid"] : ["worldid"]}
+      description={`“${p.title}” will not run. Your passkey signs the cancel; WAVE pays the gas.`}
+      methods={["faceid"]}
       doneTitle="Cancelled"
       doneBody={`“${p.title}” won't run.`}
-      onApproved={(m) => {
-        removePending(p.id);
-        if (p.cardId) removeCard(p.cardId);
-        addTx({ kind: "cancelled", title: p.title, subtitle: `Cancelled with ${METHOD_LABEL[m]} · Just now`, amount: p.transfer?.amount, token: p.transfer?.token });
+      run={async () => {
+        const r = await cancelPending(passkey, p.id);
+        if (r.success) {
+          removePending(p.id);
+          refresh();
+        }
+        return r;
       }}
       onClose={onClose}
     />

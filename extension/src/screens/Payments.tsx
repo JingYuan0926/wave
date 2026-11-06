@@ -1,32 +1,35 @@
+import { useState } from "react";
 import { Hourglass, Plus, ShieldAlert } from "lucide-react";
 import { METHOD_LABEL } from "../data";
 import { fmtCountdown } from "../lib/format";
+import { runPending } from "../lib/wc/wallet";
 import { useNow, useStore } from "../store";
 import type { Nav } from "../nav";
 import { PageTitle, Pill, SectionHeader, TopBar, focusRing } from "../components/ui";
 import { TxRow } from "../components/TxRow";
 
 export function Payments({ nav }: { nav: Nav }) {
-  const { state, removePending, addTx, debit, activateCard } = useStore();
+  const { state, removePending, refresh } = useStore();
   const now = useNow(1000);
+  const [running, setRunning] = useState<string | null>(null);
+  const [runError, setRunError] = useState<{ id: string; msg: string } | null>(null);
 
-  const runNow = (id: string) => {
+  /** After the delay, the passkey signs executeScheduled. The account checks the delay itself. */
+  const runNow = async (id: string) => {
     const p = state.pending.find((x) => x.id === id);
-    if (!p) return;
-    removePending(id);
-    if (p.cardId) activateCard(p.cardId);
-    if (p.transfer) {
-      debit(p.transfer.token, p.transfer.amount);
-      addTx({
-        kind: "out",
-        title: `To ${p.transfer.to}`,
-        subtitle: `${METHOD_LABEL[p.proposedBy]} · after delay · Just now`,
-        amount: p.transfer.amount,
-        token: p.transfer.token,
-        method: p.proposedBy,
-      });
-    } else {
-      addTx({ kind: "config", title: p.title, subtitle: `${METHOD_LABEL[p.proposedBy]} · after delay · Just now` });
+    if (!p || !state.passkey) return;
+    setRunning(id);
+    setRunError(null);
+    try {
+      const r = await runPending(state.passkey, p.id, p.batch);
+      if (!r.success) throw new Error("The wallet refused to run it. Its rules may have changed.");
+      removePending(id);
+      refresh();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setRunError({ id, msg: /NotAllowedError|aborted|cancel/i.test(msg) ? "The passkey prompt was closed." : msg });
+    } finally {
+      setRunning(null);
     }
   };
 
@@ -93,12 +96,18 @@ export function Payments({ nav }: { nav: Nav }) {
                       <button
                         type="button"
                         onClick={() => runNow(p.id)}
-                        className={`h-11 flex-1 rounded-full bg-wave-deep text-[15px] font-semibold text-white hover:bg-[#262626] ${focusRing}`}
+                        disabled={running !== null}
+                        className={`h-11 flex-1 rounded-full bg-wave-deep text-[15px] font-semibold text-white hover:bg-[#262626] disabled:opacity-50 ${focusRing}`}
                       >
-                        Run now
+                        {running === p.id ? "Running…" : "Run now"}
                       </button>
                     )}
                   </div>
+                  {runError?.id === p.id && running === null && (
+                    <p role="alert" className="mt-2 text-sm font-semibold text-danger">
+                      {runError.msg}
+                    </p>
+                  )}
                 </li>
               );
             })}

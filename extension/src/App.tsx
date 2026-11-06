@@ -6,6 +6,8 @@ import { Home } from "./screens/Home";
 import { Agents } from "./screens/Agents";
 import { Recipients } from "./screens/Recipients";
 import { Payments } from "./screens/Payments";
+import { CreateWallet, NotDeployed } from "./screens/Onboarding";
+import { useStore } from "./store";
 import { AccountDetails, Methods, SpendingLimits } from "./screens/SubPages";
 import { SendSheet } from "./sheets/SendSheet";
 import { CardsSheet, CreateCardSheet } from "./sheets/CardSheets";
@@ -26,6 +28,7 @@ export default function App() {
   const [sheet, setSheet] = useState<SheetState | null>(null);
   const scrollRef = useRef<HTMLElement>(null);
   const framed = useFramed();
+  const { status } = useStore().state;
 
   useEffect(() => {
     document.body.classList.toggle("is-ext", isExtension);
@@ -49,6 +52,13 @@ export default function App() {
   );
 
   const close = () => setSheet(null);
+
+  if (status === "not-deployed" || status === "no-wallet") {
+    const first = (
+      <div className="relative h-full w-full overflow-y-auto bg-white">{status === "not-deployed" ? <NotDeployed /> : <CreateWallet />}</div>
+    );
+    return framed ? <PhoneFrame>{first}</PhoneFrame> : <div className="mx-auto h-full w-full max-w-[393px]">{first}</div>;
+  }
 
   const screen = sub
     ? { limits: <SpendingLimits nav={nav} />, methods: <Methods nav={nav} />, account: <AccountDetails nav={nav} /> }[sub]
