@@ -791,37 +791,86 @@ phrase and no gas, and does not need to know the chain.
 
 ## Build status
 
-- [ ] Measure the gas of the full validation prefix with the World ID validator
+A checked item passed a real test on the local stack. **The test identity** is a local identity
+that makes real Groth16 proofs but is not a World ID. **The software authenticator** and **the
+virtual authenticator** sign with real P-256 math, but no device, face or finger is involved. See
+[Test results](#test-results).
+
+- [x] Measure the gas of the full validation prefix with the World ID validator.
+      *Test identity. World ID `VERIFY` uses about 236.8k gas, 253.8k in a first transaction.*
 - [ ] An official World ID test credential produces a transaction-bound 3.0 proof that our
-      verifier accepts on the devnet
-- [ ] Solve the root dependency (choose option 1 or 2)
-- [ ] The root publisher writes World ID roots to the EIP-8272 contract
-- [ ] Get an admitted transaction on the alternative-mempool explorer
-- [ ] Passkey validator with the `BE`/`BS` check
-- [ ] Entry-point restriction in validation (allowed selectors only)
-- [ ] Delay queue: `schedule`, `approveRecovery`, `cancel`, `executeScheduled`
-- [ ] Configuration version invalidates queued actions and collected approvals
-- [ ] Owner-set spending rules: amount tiers, method per tier, delay per tier, period caps
-- [ ] Period limits are cumulative across methods, transactions and batches
-- [ ] Stricter rules apply at once; looser rules need World ID and a 48-hour delay
-- [ ] Attack demos: stolen passkey rejected; World ID change cancelled
-- [ ] Fallback owner change and root source change with two distinct other methods
+      verifier accepts on the devnet. *Not run. No simulator scan and no World App scan yet.*
+- [x] Solve the root dependency (choose option 1 or 2). *Option 1 with a root hint. Test identity
+      only. A real World root has not gone through this path.*
+- [x] The root publisher writes World ID roots to the EIP-8272 contract. *Test identity roots
+      only. The publisher has not written a real World root.*
+- [x] Get an admitted transaction on the local sidecar, and open it on the local explorer.
+      *Test identity and software authenticator.*
+- [ ] Get an admitted transaction on the public alternative-mempool explorer. *Not run.*
+- [x] Passkey validator with the `BE`/`BS` check. *Software and virtual authenticators only.*
+- [ ] Passkeys on a real device: Face ID, Touch ID and a security key. *Not run.*
+- [x] Entry-point restriction in validation (allowed selectors only). *Test identity and software
+      authenticator.*
+- [x] Delay queue: `schedule`, `approveRecovery`, `cancel`, `executeScheduled`. *Test identity and
+      software authenticator. Chain runs used demo delays. Forge tests check the real delay values.*
+- [x] Configuration version invalidates queued actions and collected approvals. *The chain run
+      covers a queued action. A forge test covers collected approvals.*
+- [x] Owner-set spending rules: amount tiers, method per tier, delay per tier, period caps.
+      *Test identity, software authenticator and virtual authenticator.*
+- [x] Period limits are cumulative across methods and transactions. *Test identity and software
+      authenticator.*
+- [ ] Period limits are cumulative across batches. *Not tested: no test sends two transfers in
+      one batch.*
+- [x] Stricter rules apply at once; looser rules need World ID and a 48-hour delay. *Test identity
+      and software authenticator. The chain run used a demo delay. A forge test checks 48 hours.*
+- [x] Attack demos: stolen passkey rejected; World ID change cancelled. *Test identity and virtual
+      authenticator, in Chromium.*
+- [x] Fallback owner change with two distinct other methods. *Test identity and software
+      authenticator, with a demo delay. A forge test checks the distinct-method rule and 7 days.*
+- [ ] Fallback root source change with two distinct other methods. *A forge test checks who can
+      propose it. No test runs the full change.*
 - [ ] Whitechain merchant version
+- [ ] Agent wallets: the user creates a child wallet with the normal creation flow. *Not tested.
+      Compile only: no agent wallet ran on a chain.*
+- [ ] Agent wallets: the agent key and the spending tiers are enforced onchain. *Not tested.*
+- [ ] Agent wallets: revoke works at once, and only the master can administer the wallet.
+      *Not tested.*
+- [ ] Agent wallets use the local gas sponsor. *Not tested.*
+- [ ] World ID Agent Pass: a fresh login approves one exact agent spend, and every refused path
+      leaves it not run. *Not tested. Compile only: no login has completed.*
+- [ ] Demo approval success and cancellation with no payment
 
-## Repository layout (planned)
+## Repository layout
 
 ```
-src/
-  WaveAccount.sol              ERC-8286 account, contract-dispatched route, rules and delay queue in execute
-  WorldIDFrameValidator.sol     World ID 3.0 proof over sig_hash, root from EIP-8272
-  PasskeyFrameValidator.sol     WebAuthn P-256 assertion over sig_hash, with backup-flag check
-  NfcCardFrameValidator.sol     stretch goal
-  WaveAccountFactory.sol       CREATE2 clones with initial configuration in code
-  RootPublisher.sol             writes World ID roots to the EIP-8272 contract
+contracts/                        own package.json. Hardhat with the solc fork, forge for policy tests.
+  src/
+    WaveAccount.sol               ERC-8286 account, contract-dispatched route, six entry points
+    WavePolicy.sol                tiers, period counters, delay queue, recovery, configuration version
+    WorldIDFrameValidator.sol     World ID 3.0 proof over sig_hash, root from an EIP-8272 reference
+    PasskeyFrameValidator.sol     WebAuthn P-256 assertion over sig_hash, with backup-flag check
+    AgentKeyFrameValidator.sol    secp256k1 signature over sig_hash, for agent wallets only
+    WaveAccountFactory.sol        CREATE2 clones with initial configuration in code
+    SemaphoreVerifier.sol         World's Groth16 verifier
+    RecentRootRead.yul            helper that runs RECENTROOTREFLOAD (0xB6)
+    TestUSDC.sol                  local test token, open mint
+  scripts/deploy.ts               deploys all contracts, writes deployments/local.json
+  test/WavePolicy.t.sol           forge tests for the policy
+devnet/                           the local stack: ethrex, Lighthouse, sidecar, explorer
+lib/                              frame builder, chain client, World ID, policy encoding
+lib/server/                       route logic: prepare, send, roots, activity, World ID config,
+                                  agent wallets, Agent Pass
+app/                              web app and API route handlers
+components/                       web app components
 scripts/
-  send-worldid-frame-tx.ts      builds, proves, simulates and submits a frame transaction
-app/                            web app: create account, approve, settings, pending actions
+  e2e.ts                          12 cases on the local stack: real frames, real Groth16
+  api-smoke.ts                    runs the API routes the same way the browser does
+  unit.ts                         checks that need no chain
+  fetch-zk.sh                     downloads the circuit files for the test identity
 ```
+
+The server publishes roots with a plain transaction, so `RootPublisher.sol` does not exist.
+`NfcCardFrameValidator.sol` does not exist yet.
 
 ## Running it
 
