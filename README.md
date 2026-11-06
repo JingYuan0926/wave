@@ -169,73 +169,97 @@ signatures = [ ARBITRARY entry with the witness, SECP256K1 entry from the sponso
 
 ### One transaction, step by step (canonical-hash path)
 
-> This section and the validator sketch below follow the **canonical-hash path**. They depend on
-> root option 1 in [The root dependency](#the-root-dependency).
+> This section and the validator below follow the **canonical-hash path**. They depend on root
+> option 1 in [The root dependency](#the-root-dependency).
 
 ```
-frame[0]  VERIFY  target = RECENT_ROOT_ADDRESS (EIP-8272)   data = (source_id, slot, root)
-frame[1]  VERIFY  target = account                          data = index of the proof entry
-frame[2+] SENDER  target = account (contract-dispatched route), calls execute
+frame[0]  DEFAULT  target = factory   createAccount      first transaction only
+frame[n]  VERIFY   target = account   data = index of the proof entry
+frame[n+1] SENDER  target = account (contract-dispatched route), calls one of six selectors
 
-nonce_keys[0] = address of WorldIDFrameValidator           (our convention)
-signatures    = [ ARBITRARY entry, empty msg, witness = (root, nullifierHash, proof) ]
+nonce_keys[0]          = address of the validator          (our convention)
+signatures             = [ ARBITRARY entry, empty msg, witness ]
+recent_root_references = [ (source_id, slot, root) ]       (envelope field, World ID only)
 ```
+
+This is the shape of a self-paid transaction. The World ID witness is
+`root || nullifierHash || proof`, 320 bytes. The passkey witness is 512 bytes.
 
 1. Get the World ID root that the proof will use. See [The root dependency](#the-root-dependency).
-2. Build the transaction with the recent-root frame for that root.
+2. Build the transaction with a recent-root reference for that root.
 3. Put a **placeholder of the exact final witness length** into the `ARBITRARY` entry.
-4. Compute `sig_hash` (`TXPARAM(0x08)`). EIP-8141 leaves out the bytes of an empty-`msg` entry,
-   but it **commits to their length**. So the placeholder must already have the final length.
+4. Compute `sig_hash` (`TXPARAM(0x08)`). The EIP-8141 text leaves out the bytes of an empty-`msg`
+   entry, but it **commits to their length**. Ethrex on chain 1337 leaves out the length too. A
+   fixed length works under both rules.
 5. Show the decoded transaction to the owner, before the app asks World App for a proof.
-6. World App makes a World ID proof with `signal = sig_hash`. We still must confirm the exact
-   signal encoding (`hashToField`).
-7. Replace the placeholder with the real witness of the same length. `sig_hash` does not change.
-8. Send the transaction to the alternative mempool.
+6. World App makes a World ID proof with `signal = sig_hash`.
+7. If the proof returns another root, go back to step 2 with that root, and scan again.
+8. Replace the placeholder with the real witness of the same length. `sig_hash` does not change.
+9. Simulate with `ethrex_simulateFrameTransaction`. Stop if the validation prefix fails.
+10. Send with `eth_sendFrameTransaction` to the sidecar. The sidecar bundles every 10 seconds.
+
+A failed `VERIFY` frame makes the transaction invalid, so nothing is mined. A failed `SENDER`
+frame mines with status `0x0`. That transaction spends gas and moves the nonce.
 
 ### The root dependency
 
-The root in the recent-root frame is part of `sig_hash`. The proof must use the same root.
+The root reference is part of `sig_hash`. The proof must use the same root.
 
-- If World's prover returns a proof for a different root, we must rebuild the frame.
-- Rebuilding the frame changes `sig_hash`, so the proof no longer matches the transaction.
+- If World's prover returns a proof for a different root, we must rebuild the reference.
+- Rebuilding the reference changes `sig_hash`, so the proof no longer matches the transaction.
 
-**Options. We have not chosen one yet:**
+**We chose option 1, with a root hint.** IDKit has no setting that pins a root. So the app keeps
+the last root it saw, and it uses that root as its guess:
 
-1. Get the exact root that the prover will use, before we build the transaction.
-2. Bind the proof to a custom digest that leaves out only the recent-root frame's data. The
-   validator then checks that the frame's root equals the root inside the proof.
-   - The proof then no longer approves the full canonical `sig_hash`.
-   - This path needs its own exact commitment definition. The digest must still bind the root
-     source, the root's freshness, the fees, every action, the nonce keys and the chain ID.
-   - EIP-8141 warns that custom hashes need careful transaction binding.
-   - It also costs more gas, because the validator must rebuild the digest from introspection data.
+1. The server publishes the hint root under the pinned source (`POST /api/root/publish`).
+2. The transaction references that root.
+3. If the proof returns another `merkle_root`, the server publishes that root. The app rebuilds
+   the transaction and asks for one more scan. The UI says "World's root changed. Scan again."
+4. The app keeps the last `merkle_root` as the hint for the next transaction.
+5. The first hint is the creation scan's `merkle_root`. If that is missing, the server reads
+   `latestRoot()` on World Chain. In staging, it reads World Chain Sepolia.
+6. The server publishes a root again after 8000 slots, before the 8191-slot limit.
 
-The rest of this README describes option 1.
+**Trade-off:** a root change costs the owner a second scan. We do not yet know how often a real
+scan hits this.
+
+**The option we did not build:** bind the proof to a custom digest that leaves out only the root
+reference. The validator then checks that the reference's root equals the root inside the proof.
+
+- The proof then no longer approves the full canonical `sig_hash`.
+- This path needs its own exact commitment definition. The digest must still bind the root
+  source, the root's freshness, the fees, every action, the nonce keys and the chain ID.
+- EIP-8141 warns that custom hashes need careful transaction binding.
+- It also costs more gas, because the validator must rebuild the digest from introspection data.
 
 ### The World ID validator (canonical-hash path)
 
 ```solidity
-// Sketch, not final code. World ID 3.0 style.
+// Shortened from contracts/src/WorldIDFrameValidator.sol. World ID 3.0 style.
 // Runs by DELEGATECALL in the account's context, inside a VERIFY frame.
-function validateFrame(bytes calldata data) external view returns (uint8 approvalMode) {
+function validateFrame(bytes calldata data) external view returns (uint8) {
     if (!LibERC8286.isTargetedFrame()) return APPROVE_NONE;
 
-    (uint256 ownerNullifier, uint256 extNullifier, bytes32 rootSource) = _config(); // storage, else clone args
-    (uint256 root, uint256 nullifier, uint256[8] memory proof) = _witness(data);    // SIGPARAM / SIGDATACOPY
+    (uint256 owner, uint256 ext, bytes32 source) = LibWaveIdentity.read(); // storage, else clone args
+    bytes memory w = LibWitness.witness(data);                             // SIGPARAM / SIGDATACOPY
+    if (w.length != WITNESS_LEN) return APPROVE_NONE;
+    (uint256 root, uint256 nullifier, uint256[8] memory proof) = abi.decode(w, (uint256, uint256, uint256[8]));
 
-    if (nullifier != ownerNullifier) return APPROVE_NONE;          // only the owner
-    if (!_rootPublished(rootSource, root)) return APPROVE_NONE;    // reads the EIP-8272 frame with FRAMEDATACOPY
+    if (nullifier != owner) return APPROVE_NONE;              // only the owner
+    if (!_rootReferenced(source, root)) return APPROVE_NONE;  // TXPARAM(0x11), RECENTROOTREFLOAD (0xB6)
 
-    uint256 signalHash = _hashToField(LibERC8286.sigHash());       // encoding to confirm against IDKit
-    if (!VERIFIER.verifyProof(root, signalHash, nullifier, extNullifier, proof)) return APPROVE_NONE;
+    uint256 signalHash = uint256(keccak256(abi.encodePacked(LibERC8286.sigHash()))) >> 8;
+    try VERIFIER.verifyProof(proof, [root, nullifier, signalHash, ext]) {} catch { return APPROVE_NONE; }
 
     return LibERC8286.allowedScope(LibERC8286.currentFrameIndex());
 }
 ```
 
 - `VERIFIER` is a pure Groth16 verifier contract that we deploy on the devnet. It reads no storage.
-- The proof signs `sig_hash`. `sig_hash` commits every frame, the fees, the nonce keys and the
-  chain ID. So nobody can reuse a proof for another transaction or another chain.
+- When the validator returns `APPROVE_NONE`, the account reverts with `ValidationFailed`. The
+  chain does not mine the transaction.
+- The proof signs `sig_hash`. `sig_hash` commits every frame, the fees, the nonce keys, the root
+  references and the chain ID. So nobody can reuse a proof for another transaction or another chain.
 - World's verifier contracts do not track nullifiers. We do not mark the nullifier as used. We
   check that it **equals** the owner's nullifier. The signed nonce prevents replay.
 
@@ -243,15 +267,21 @@ function validateFrame(bytes calldata data) external view returns (uint8 approva
 
 World ID roots live on World Chain and Ethereum, not on the devnet.
 
-1. A root publisher reads a World ID root and writes it to the EIP-8272 contract
-   (`0x8272D9679689Ea2f307140CdF9002D27dC00Ffff`) under its own `source_id`.
-2. The transaction adds a recent-root `VERIFY` frame. That frame proves the root is recent.
-3. The validator accepts only roots from the `source_id` in the account's configuration.
+1. A root publisher reads a World ID root. It sends exactly `salt || root` (64 bytes, value 0) to
+   the EIP-8272 contract at `0x…8272`. This writes the root under
+   `source_id = keccak256(caller || salt)`.
+2. The transaction names `(source_id, slot, root)` in its `recent_root_references` envelope field.
+   The protocol rejects a reference that is not committed or that is too old.
+3. The validator reads the count with `TXPARAM(0x11)`, and each field with `RECENTROOTREFLOAD`
+   (`0xB6`). The solc fork has no builtin for `0xB6`, so a small helper contract runs it
+   (`contracts/src/RecentRootRead.yul`).
+4. The validator accepts only roots from the `source_id` in the account's configuration.
 
 **What EIP-8272 does and does not give:**
 
 - Validation reads no other contract's storage. EIP-8272 is the intended way to bring a root in.
-- A reference stays usable for 8191 slots. After that, the mempool evicts the transaction.
+- A root written in slot S works from slot S+1 until slot S+8191. After that, the chain rejects
+  the reference.
 - **EIP-8272 checks publication recency, not cross-chain authenticity.** It does not prove that
   the root is current on World Chain, and it does not respect World ID revocation.
 - **The prototype trusts the configured root publisher** to publish authentic and fresh World ID
@@ -259,10 +289,16 @@ World ID roots live on World Chain and Ethereum, not on the devnet.
 - A fabricated root alone does not give an attacker the owner's credential, because the
   nullifier must still match. But this does not prove that theft is impossible in every case,
   for example with a compromised or revoked credential.
-- Anyone can publish under their own source. Nobody can write under our pinned source.
+- **Our publisher does not check that a root is real.** `POST /api/root/publish` writes the root
+  that it receives. A check could block a real scan, because a proof root can exist on Ethereum
+  before it reaches World Chain.
+- Anyone who can reach this route can publish any root under the pinned source. The route accepts
+  local callers only. A public deployment must close this gap.
+- Anyone can publish under their own source. Nobody else can write under our pinned source,
+  because the source ID holds the publisher's address.
 - **Deadlock risk:** if our source stops, and a source change needs a World ID proof that uses
   that same source, the account cannot change it. So a source change is also possible with
-  other enrolled methods, after a delay.
+  two device-bound methods, after a delay.
 
 ### More methods: mix and match
 
