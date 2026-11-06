@@ -335,16 +335,19 @@ Each method is its own ERC-8286 frame validator. The owner installs them in Sett
 
 The account uses the **contract-dispatched execution route**.
 
-- **In validation:** the account's `verify` clears the execution approval unless every `SENDER`
-  frame targets the account itself (ERC-8286 verify step 5).
+- **In validation:** the account's `verify` reverts with `SenderFrameNotAllowed` unless every
+  `SENDER` frame targets the account itself. ERC-8286 verify step 5 clears the execution approval
+  instead. The effect is the same, and a revert gives the app a decoded reason.
 - **Targeting the account is not enough.** A frame that targets the account could still call
   `installModule` or another exposed function directly. Such a call arrives as a self-call, so a
   "self-call only" check does not stop it.
 - **So validation also restricts entry points.** `verify` reads each `SENDER` frame's function
-  selector. It allows only `execute`, `schedule`, `approveRecovery`, `cancel` and
-  `executeScheduled`.
-- **Configuration functions are not entry points.** Module changes, limit changes, owner changes
+  selector. It allows only six: `execute`, `schedule`, `approveRecovery`, `cancel`,
+  `executeScheduled` and `tighten`. This check reads no storage.
+- **Configuration functions are not entry points.** Module changes, loosened limits, owner changes
   and root source changes run only from inside `executeScheduled`, after the delay.
+- **`tighten` changes limits at once.** It checks onchain that the new tiers are stricter than the
+  old ones, and it reverts with `NotStricter` otherwise.
 - **Summary:** validation restricts execution routes, and every sensitive account entry point
   enforces the authorization and delay policy, including direct calls to configuration functions.
 - **In execution:** `execute` reads `TXPARAM(0x10)` to see which validator approved the
@@ -357,6 +360,9 @@ of a listed token that the owner's spending rules allow. Sensitive calls include
 `permit`, `setApprovalForAll`), operator permissions, unknown contract calls, any batch that holds
 a sensitive call, and module or configuration changes.
 
+A **listed token** is ETH, the Test USDC of the deployment, or a token that has tiers. A new
+account has no tiers. So World ID alone approves any transfer of a listed token, with no delay.
+
 **Period limits are cumulative.** Each limit (for example, per day or per week) is one counter
 across all methods, all transactions and all batches. It is not checked separately for each
 method.
@@ -367,8 +373,8 @@ method.
 | Token approval, operator permission, unknown contract call | World ID | 24 hours, cancellable |
 | Make the spending rules stricter (lower amount, stronger method, longer delay) | Any enrolled method | None |
 | Add or remove a method, loosen the spending rules, change the root source | World ID | 48 hours, cancellable |
-| Fallback owner change (World ID lost) | Two distinct other enrolled methods | 7 days, only World ID can cancel |
-| Root source change (publisher stopped) | Two distinct other enrolled methods | 7 days, only World ID can cancel |
+| Fallback owner change (World ID lost) | Two distinct device-bound methods. A synced passkey cannot take part. | 7 days, only World ID can cancel |
+| Root source change (publisher stopped) | Two distinct device-bound methods. A synced passkey cannot take part. | 7 days, only World ID can cancel |
 
 ### Owner-set spending rules
 
@@ -379,14 +385,18 @@ The owner sets the spending rules in Settings. Each rule has amount tiers, and e
 3. **A delay** before the transfer runs. Zero means "at once".
 4. **A period cap** (optional): a total per day or per week for that tier. When the cap is used
    up, the next tier's rule applies.
+5. **A small mark** (optional). A synced passkey can approve a tier only if it has this mark.
 
 **Example rule for USDC:**
 
 | Amount per transfer | Method | Delay | Period cap |
 |---|---|---|---|
-| Under 100 USDC | Face ID (passkey) | None | 300 USDC per day |
+| Under 100 USDC (marked small) | Face ID (passkey) | None | 300 USDC per day |
 | 100 to 1,000 USDC | World ID | None | 2,000 USDC per week |
 | Over 1,000 USDC | World ID | 24 hours, cancellable | None |
+
+The local chain has no real USDC. The app uses Test USDC (`tUSDC`), with 6 decimals and an open
+mint.
 
 **How the account checks a transfer:**
 
@@ -403,7 +413,10 @@ The owner sets the spending rules in Settings. Each rule has amount tiers, and e
 - **Making the rules looser needs World ID and waits 48 hours.** No rule can bring this 48-hour
   floor down, so an attacker cannot remove the delays quickly.
 - **Trade-off:** a stolen method can make the rules stricter. This can annoy the owner, but it
-  cannot move funds.
+  cannot move funds to an attacker's address.
+- **Gas fees pass no spending rule.** The signer sets the fee, so `verify` rejects a fee above
+  50 gwei per gas or a total above 0.05 ETH per transaction. A stolen method can still repeat
+  transactions and burn ETH up to that limit each time, until the owner removes it.
 
 **Limits of the prototype:**
 
@@ -416,9 +429,10 @@ The owner sets the spending rules in Settings. Each rule has amount tiers, and e
 1. `schedule`: stores the exact action (a hash of its calls), the validator that proposed it,
    the configuration version, the earliest execution time and a status.
 2. `approveRecovery`: for actions that need two methods. Each method approves the **same action
-   hash** in its own transaction, because each transaction names one validator. The account
-   counts **distinct validators**. A second approval from the same validator does not count. The
-   delay starts when the second distinct approval arrives.
+   hash** in its own transaction, because each transaction names one validator. The proposal
+   counts as the first approval. The account counts **distinct validators**. A second approval
+   from the same validator does not count. The delay starts when the second distinct approval
+   arrives.
 3. `cancel`: see the cancel rules below.
 4. `executeScheduled`: after the delay, anyone can execute exactly the stored action, once. It
    fails if the configuration version has changed.
@@ -435,16 +449,20 @@ a configuration version. Each scheduled action and each collected recovery appro
 version from the moment it was made. A version change invalidates all of them. So a removed
 credential cannot leave a queued action behind.
 
+`tighten` does not change the version. A queued transfer of that token fails with `RuleChanged`.
+Other queued actions continue.
+
 **Independence:** two methods on one compromised phone are not independent. The chain cannot check
-this. The app recommends methods on different devices, for example a passkey on the phone and an
-NFC card.
+this. The app recommends methods on different devices, for example a passkey on the phone and a
+security key.
 
 Scheduled actions emit events, and the app shows them. This **creates a cancellation window**.
 It does not guarantee that the owner sees the action in time. Spending under the daily limit is
 still immediate.
 
 **An account with World ID only has no fallback.** If the owner loses World ID access for good,
-the funds are lost. The app asks the owner to enroll at least two more methods.
+the funds are lost. An account with only synced passkeys has the same problem. The app asks the
+owner to enroll at least two more device-bound methods. Today that means two security keys.
 
 ### Why this may need the alternative mempool
 
