@@ -1,0 +1,23 @@
+{
+  "name": "wave-contracts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "fetch-solc": "bash scripts/fetch-solc.sh",
+    "compile": "hardhat compile --no-tests",
+    "test": "forge test",
+    "deploy": "tsx scripts/deploy.ts",
+    "export-abi": "tsx scripts/export-abi.ts"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "5.6.1",
+    "solady": "0.1.26"
+  },
+  "devDependencies": {
+    "hardhat": "3.14.0",
+    "tsx": "4.23.15",
+    "typescript": "^5",
+    "viem": "2.57.16"
+  }
+}
