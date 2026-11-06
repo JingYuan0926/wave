@@ -1,7 +1,7 @@
 "use client";
 
 import { useSyncExternalStore } from "react";
-import type { Address, DevIdentity, Hex, PasskeySlot } from "@/lib/api-types";
+import type { Address, DevIdentity, Hex, PasskeySlot, WalletPlan } from "@/lib/api-types";
 
 /**
  * Per-browser state. The chain holds the real state. This store keeps only
@@ -11,14 +11,18 @@ import type { Address, DevIdentity, Hex, PasskeySlot } from "@/lib/api-types";
 
 export type LocalWallet = {
   address: Address;
-  ownerNullifierHash: Hex;
-  salt: Hex;
+  /** What the owner ticked. The first transaction deploys the wallet from this plan. */
+  plan: WalletPlan;
   /** The last `merkle_root` seen. The next World ID tx references it. */
   rootHint: Hex | null;
 };
 
+export type PasskeyName = "passkey" | "security-key";
+
 export type LocalPasskey = {
   credentialId: string;
+  /** The chain sees one kind of key. This name exists only in this browser. */
+  name?: PasskeyName;
 };
 
 export type LocalState = {
@@ -28,10 +32,26 @@ export type LocalState = {
   recoveryIdentities: Record<string, DevIdentity>;
   /** Key: `${address}:${slot}`. */
   passkeys: Record<string, LocalPasskey>;
+  /** New owner passkeys that wait for a recovery. Key: the public key x, in lowercase. */
+  recoveryPasskeys: Record<string, LocalPasskey>;
 };
 
 const KEY = "wave.local.v1";
-const EMPTY: LocalState = { wallet: null, identity: null, recoveryIdentities: {}, passkeys: {} };
+const EMPTY: LocalState = {
+  wallet: null,
+  identity: null,
+  recoveryIdentities: {},
+  passkeys: {},
+  recoveryPasskeys: {},
+};
+
+/** A wallet from before the plan had only a World ID owner and no extra methods. */
+function migrate(state: LocalState): LocalState {
+  const old = state.wallet as (LocalWallet & { ownerNullifierHash?: Hex }) | null;
+  if (!old || old.plan || !old.ownerNullifierHash) return state;
+  const plan: WalletPlan = { owner: { kind: "world", nullifierHash: old.ownerNullifierHash }, extras: [] };
+  return { ...state, wallet: { address: old.address, plan, rootHint: old.rootHint } };
+}
 
 let cached: LocalState | null = null;
 const listeners = new Set<() => void>();
@@ -40,7 +60,7 @@ function read(): LocalState {
   if (cached) return cached;
   try {
     const raw = window.localStorage.getItem(KEY);
-    cached = raw ? { ...EMPTY, ...(JSON.parse(raw) as Partial<LocalState>) } : EMPTY;
+    cached = raw ? migrate({ ...EMPTY, ...(JSON.parse(raw) as Partial<LocalState>) }) : EMPTY;
   } catch {
     cached = EMPTY;
   }
@@ -146,4 +166,18 @@ export function findPasskey(
 
 export function getPasskey(address: Address, slot: PasskeySlot): LocalPasskey | null {
   return findPasskey(read(), address, slot);
+}
+
+/** A recovery names this key. It signs only after the recovery runs. */
+export function saveRecoveryPasskey(x: Hex, passkey: LocalPasskey) {
+  const state = read();
+  write({ ...state, recoveryPasskeys: { ...state.recoveryPasskeys, [x.toLowerCase()]: passkey } });
+}
+
+/** After a recovery, the owner slot holds the new key that this browser made for it. */
+export function adoptRecoveryPasskey(address: Address, slot: PasskeySlot, x: Hex) {
+  const state = read();
+  const passkey = state.recoveryPasskeys[x.toLowerCase()];
+  if (!passkey || state.passkeys[passkeyKey(address, slot)]?.credentialId === passkey.credentialId) return;
+  savePasskey(address, slot, passkey);
 }

@@ -20,14 +20,17 @@ export function passkeysSupported(): boolean {
 }
 
 /**
- * Face ID, Touch ID and security keys all go through this call. It names no authenticator type,
- * so the browser offers each one. A security key is the usual way to get a device-bound method.
+ * Face ID, Touch ID and security keys all go through this call. With no attachment the browser
+ * offers each one. A security key is the usual way to get a device-bound method.
  */
-export async function enrolPasskey(name: string): Promise<EnrolledPasskey> {
+export async function enrolPasskey(
+  name: string,
+  attachment?: "platform" | "cross-platform",
+): Promise<EnrolledPasskey> {
   if (MOCK) {
     return {
       credentialId: `mock-${Date.now()}`,
-      publicKey: { x: pad("0x01"), y: pad("0x02") },
+      publicKey: { x: pad(`0x${Date.now().toString(16)}`), y: pad("0x02") },
       backupEligible: true,
     };
   }
@@ -40,6 +43,7 @@ export async function enrolPasskey(name: string): Promise<EnrolledPasskey> {
     challenge,
     rp: { id: rpId, name: "WAVE" },
     authenticatorSelection: {
+      ...(attachment ? { authenticatorAttachment: attachment } : {}),
       residentKey: "preferred",
       userVerification,
     },
@@ -59,8 +63,11 @@ export async function enrolPasskey(name: string): Promise<EnrolledPasskey> {
   };
 }
 
-/** Sign sig_hash and return the padded witness for the ARBITRARY entry. */
-export async function signWithPasskey(sigHash: Hex, credentialId: string): Promise<Hex> {
+/**
+ * Sign sig_hash and return the padded witness for the ARBITRARY entry. With no credential ID, the
+ * device shows its passkey picker for this site.
+ */
+export async function signWithPasskey(sigHash: Hex, credentialId?: string): Promise<Hex> {
   if (MOCK) return pad("0x01", { dir: "right", size: WITNESS_LENGTH });
 
   const { metadata, signature } = await Authentication.sign({
