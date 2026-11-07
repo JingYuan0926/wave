@@ -953,7 +953,8 @@ ran only with a local fake issuer. Sandbox identities are fake.
 
 ### 3. Whitechain: Scale · Payments Nobody Notices (planned, after the core)
 
-**Status: planned.** We build this only after the core works.
+**Status: planned.** We build this only after the core works. The first part exists now: see
+[Whitechain payments switch](#whitechain-payments-switch).
 
 A merchant version of the wallet: the payer pays in USDT with Face ID. The payer holds no seed
 phrase and no gas, and does not need to know the chain.
@@ -1218,6 +1219,44 @@ To stop:
 
 After the Mac sleeps, run `devnet/up.sh`. It keeps the chain.
 
+### Whitechain payments switch
+
+The switch is in **Account details**, above **Start over**. It is off by default.
+
+- **Off:** the app works as before. The switch code makes no network call.
+- **On:** only **Send** changes. A send moves USDT through an ERC-4337 account on Whitechain Sepolia
+  (chain ID 1874). The relayer pays the gas. The sheet shows the Whitechain hash and an explorer link.
+- **Token:** only the Whitechain test USDT, `0xcedfB56113143d55b2358b8CFbB0dEB5Ad2f55a7`. Its owner
+  mints it, so you must get some from the Whitechain team.
+- **Amounts:** the sheet sends only amounts that need no wait. Larger amounts stop on the form.
+- **Failure:** with no deployment or no relayer key, the switch shows the reason and stays off.
+
+The first press in the sheet creates a Whitechain passkey. This passkey is separate from the WAVE
+passkey, and it sets the wallet address. Send USDT to that address before your first transfer.
+
+To set it up:
+
+1. Make two new keys that hold no real value. Add them to `.env.local` as `WC_DEPLOYER_KEY` and
+   `WC_RELAYER_KEY`.
+2. Get Sepolia WBT at https://faucet.testnet.whitechain.io. The deployer needs about 0.3 WBT, and
+   the relayer needs about 0.05 WBT. The faucet gives 0.5 WBT a day.
+3. In `contracts/`, run `npm install`, `npm run build:wc`, `npm run deploy:wc` and `npm run verify:wc`.
+   This writes `contracts/deployments/whitechain-sepolia.json`.
+4. Turn on the switch in Account details.
+
+**Limits on the relayer:** it sponsors only WAVE accounts with the rules of the deployment, and only
+token transfers. It has a daily count per wallet and a daily count for all wallets. It simulates
+each transaction first. The counts live in memory, so a server restart clears them. These limits
+reduce exposure. They do not stop a transfer that fails after it starts, and the paymaster pays
+for that transfer. The test token faucet accepts local callers only.
+
+**Tests:** in `contracts/`, run `npm run test:wc`. The contracts and the relayer come from the
+branch `scale/wc`. The notes for Whitechain are in `WHITECHAIN_FEEDBACK.md`.
+
+To try it with no Sepolia funds, use a local node. The header of `contracts/scripts/local-whitechain.ts`
+has the steps. Delete `contracts/deployments/whitechain-sepolia.json` after a local run, because
+it points at your local node.
+
 ### Environment variables
 
 Put these in `.env.local`. `.env.example` has every value. All values are optional for a local
@@ -1241,6 +1280,13 @@ run with the test identity.
 | `WAVE_AGENT_DEMO_KEY` | blank | The demo agent key. It signs agent spends on the server. |
 | `WAVE_URL` | `http://localhost:3000` | The app address for `mcp/wave-server.ts`. It must name localhost. Set it in the shell that starts Claude Code, because the MCP server does not read `.env.local`. |
 | `NEXT_PUBLIC_WAVE_MOCK` | not set | `1` selects the mock data layer, for UI work only. It uses no chain and no proofs. |
+| `WC_DEPLOYER_KEY` | blank | Whitechain: the key that runs `npm run deploy:wc`. It needs Sepolia WBT. |
+| `WC_RELAYER_KEY` | blank | Whitechain: the relayer key. The paymaster trusts its signature, and it pays `handleOps`. Server only. |
+| `WC_RPC_URL` | `https://rpc.testnet.whitechain.io` | Whitechain RPC for the deploy scripts and the relayer. |
+| `WC_SPONSOR_DAILY_TX` | `30` | Sponsored operations per Whitechain wallet per day. |
+| `WC_SPONSOR_GLOBAL_DAILY_TX` | `300` | Sponsored operations per day for all Whitechain wallets. |
+| `WC_PAYMASTER_DEPOSIT` | `0.2` | WBT that the deploy puts in the paymaster. |
+| `WC_DEMO_DELAY` | `0` | The delay cap of every wallet of a Whitechain deployment, in seconds. |
 
 Keep `RP_SIGNING_KEY`, `AGENT_PASS_CLIENT_SECRET` and `WAVE_AGENT_DEMO_KEY` out of the repo.
 
