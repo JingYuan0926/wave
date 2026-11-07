@@ -15,6 +15,7 @@ const eslintConfig = defineConfig([
     // Separate packages with their own tooling.
     "contracts/**",
     "devnet/**",
+    "extension/**",
   ]),
 ]);
 

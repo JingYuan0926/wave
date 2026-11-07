@@ -12,7 +12,8 @@
     "verbatimModuleSyntax": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    "types": ["vite/client", "chrome"]
+    "types": ["vite/client", "chrome"],
+    "paths": { "@/*": ["../*"] }
   },
   "include": ["src"]
 }
