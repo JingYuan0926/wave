@@ -1,23 +1,23 @@
 {
   "chainId": 1337,
   "rpcUrl": "http://localhost:8545",
-  "deployedAtBlock": 7871,
+  "deployedAtBlock": 13544,
   "devKeyAddress": "0x1FC465BB71A81604567750c2f2352721e40EFEDF",
   "rootPublisher": "0x1FC465BB71A81604567750c2f2352721e40EFEDF",
   "rootSalt": "0x3f7a80f5ff1471a45f49918c8098d579b2679d88fee037fdc1ccb0d11ea6b69c",
   "rootSourceId": "0x361303c99011aa227ca0b224a55a3daf4735bf400bab310c7d2af2818bbecd4e",
-  "semaphoreVerifier": "0x41e48ed10f4d817e312172e56179543ccf1d5095",
-  "recentRootRead": "0x3493fcc3c9110240b00dfa204b96d1e2de2610ff",
-  "worldIdValidator": "0xcc89587e25767820396c14394f0314a0bb71bd84",
+  "semaphoreVerifier": "0xa09067e4b1cd03faf9407faa886bd45525ba6e8b",
+  "recentRootRead": "0xa7b2277e934afb9af2090403e5ff20e62e649145",
+  "worldIdValidator": "0xc8cf2612d911b49b5a25c17da04ab796f73046c5",
   "passkeyValidators": [
-    "0x2dd9e3320e59583da32da2bba674ee99a3e27556",
-    "0x1cacb9068f5aeb43df6dd13761fc28806c15ba14",
-    "0xcf19453174dbf37da38ff1f7d8a8934ee8ae0d5f"
+    "0xfaec2aa0a874d3a6e8800781a2bccdce626b8bd2",
+    "0x1ca23bcb8b70a92a8465af6ebf470a783a2c3d53",
+    "0xd2059ce3703d1ce9687b33cc993f114e52b2bf33"
   ],
-  "agentKeyValidator": "0x57726ca489e19b238392566bd71ca096b98cf57e",
-  "implementation": "0x54fbe7fab4170658790c62d1cd39581df476a004",
-  "factory": "0xcccfa2d8c546347cb76a8999db0b76c209a0a204",
-  "testUsdc": "0xa375f2fb3aba312ae890eb47134a07c1fae09354",
-  "gasStation": "0x4ab9b9822577c7186aa6a6e42b770ae6759f9faa",
+  "agentKeyValidator": "0xba38e06ee23eaccd68b850e2b176f6f525e1f7e8",
+  "implementation": "0x31a62d7be68bfc5ac6bed0233a5038e656dac958",
+  "factory": "0x62f131e70ab6197deb4e485b697bb2cc4123847b",
+  "testUsdc": "0x9f052a2718c5985c163ec40ca7210452e86ff195",
+  "gasStation": "0x0e93750570a336c3fb9c14460cd16a99a4743dee",
   "sponsor": "0x0559086C81A99501dbc92b54825B6bB50cD4E39d"
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ApproveFlow, requireMethod, type ApprovalRequest } from "@/components/approve-flow";
+import { ApproveFlow, anyMethod, type ApprovalRequest } from "@/components/approve-flow";
 import { Button, Card, Notice, SectionTitle, SelectField, Sheet } from "@/components/ui";
 import { useWallet } from "@/components/wallet-provider";
 import { api } from "@/lib/api-client";
@@ -39,7 +39,7 @@ export function CreateAgent({ data, onChanged }: { data: AgentsResponse; onChang
         agent: address,
         op: { kind: "create", salt, rules: [{ token: token.address, tiers: [agentTier(draft, token)] }] },
       },
-      choices: requireMethod(account.methods, account.owner, info.world),
+      choices: anyMethod(account.methods),
       method: account.owner,
     });
   };

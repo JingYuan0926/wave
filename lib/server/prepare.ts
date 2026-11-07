@@ -482,7 +482,7 @@ const runNow = (ctx: Context, call: Call): Plan => ({
 async function agentPlan(ctx: Context, action: Extract<TxAction, { kind: 'agent' }>): Promise<Plan | Rejection> {
   const agent = asAddress(action.agent, 'agent')
   const { op } = action
-  const ownerOnly = op?.kind === 'create' || op?.kind === 'unpause' || op?.kind === 'set-tiers' || op?.kind === 'set-key'
+  const ownerOnly = op?.kind === 'unpause' || op?.kind === 'set-tiers' || op?.kind === 'set-key'
   if (ownerOnly && !isOwner(ctx)) {
     return prepareRejection({ code: 'MethodNotAllowed', args: { validator: ctx.validator } })
   }

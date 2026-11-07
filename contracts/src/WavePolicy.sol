@@ -66,7 +66,7 @@ abstract contract WavePolicy {
     /// Classes of a call from a main wallet to its own agent wallet.
     uint8 private constant AGENT_NONE = 0;
     uint8 private constant AGENT_ANY_METHOD = 1; // Any enrolled method, no delay.
-    uint8 private constant AGENT_OWNER = 2; // The owner method, no delay.
+    uint8 private constant AGENT_CREATE = 2; // Any enrolled method, no delay. It links the new agent.
     uint8 private constant AGENT_LOOSEN = 3; // The owner method, 48 hours.
 
     /// @dev keccak256(abi.encode(uint256(keccak256("wave.account.policy")) - 1)) & ~bytes32(uint256(0xff))
@@ -340,7 +340,7 @@ abstract contract WavePolicy {
         ) {
             class = AGENT_ANY_METHOD;
         } else if (s == IWaveAgent.agentSetup.selector) {
-            class = AGENT_OWNER;
+            class = AGENT_CREATE;
         } else if (
             s == IWaveAgent.agentUnpause.selector || s == IWaveAgent.agentSetTiers.selector
                 || s == IWaveAgent.agentSetKey.selector
@@ -361,8 +361,8 @@ abstract contract WavePolicy {
             _bitOf(_approver());
             return;
         }
-        if (class == AGENT_OWNER) {
-            _requireOwner();
+        if (class == AGENT_CREATE) {
+            _bitOf(_approver());
             emit AgentLinked(target);
             return;
         }
