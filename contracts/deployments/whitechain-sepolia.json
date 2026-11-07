@@ -1,0 +1,122 @@
+{
+  "network": "whitechain-sepolia",
+  "chainId": 1874,
+  "rpcUrl": "https://rpc.testnet.whitechain.io",
+  "explorer": "https://explorer.testnet.whitechain.io",
+  "deployedAtBlock": 12425014,
+  "entryPoint": "0x0000000071727De22E5E9d8BAf0edAc6f37da032",
+  "passkeyValidator": "0xe0116e9cad66d0e54ac089ae3231281cf35c1d03",
+  "implementation": "0xa2915ea1c8f7614fa9b34b0f358cf8c1899f084b",
+  "factory": "0xf2364ca7bed5a3ad0bb87b30f3ccb5735908f036",
+  "paymaster": "0x0398014e10e53b4c35ddb4cf3d8bf067394a152d",
+  "relayer": "0x8E72F5174C4BFE6503Ac457BA731Eed64FecCDBf",
+  "demoDelay": 0,
+  "defaultToken": "0xcedfB56113143d55b2358b8CFbB0dEB5Ad2f55a7",
+  "tokens": [
+    {
+      "symbol": "USDT",
+      "name": "Whitechain test USDT",
+      "address": "0xcedfB56113143d55b2358b8CFbB0dEB5Ad2f55a7",
+      "decimals": 6
+    },
+    {
+      "symbol": "USDC",
+      "name": "USDC.e (Portal bridge)",
+      "address": "0x5Eb541ba8A2DD841aF7864c3389162a23ddA8401",
+      "decimals": 6
+    },
+    {
+      "symbol": "tUSDT",
+      "name": "WAVE test USDT (open mint)",
+      "address": "0x435a19fe6be6dbb5f81642f1f538a64d6ebbd4a6",
+      "decimals": 6
+    }
+  ],
+  "rules": [
+    {
+      "token": "0xcedfB56113143d55b2358b8CFbB0dEB5Ad2f55a7",
+      "tiers": [
+        {
+          "upTo": "100000000",
+          "cap": "300000000",
+          "delay": 0,
+          "period": 86400,
+          "methods": 1
+        },
+        {
+          "upTo": "1000000000",
+          "cap": "2000000000",
+          "delay": 0,
+          "period": 604800,
+          "methods": 1
+        },
+        {
+          "upTo": "79228162514264337593543950335",
+          "cap": "0",
+          "delay": 86400,
+          "period": 0,
+          "methods": 1
+        }
+      ]
+    },
+    {
+      "token": "0x5Eb541ba8A2DD841aF7864c3389162a23ddA8401",
+      "tiers": [
+        {
+          "upTo": "100000000",
+          "cap": "300000000",
+          "delay": 0,
+          "period": 86400,
+          "methods": 1
+        },
+        {
+          "upTo": "1000000000",
+          "cap": "2000000000",
+          "delay": 0,
+          "period": 604800,
+          "methods": 1
+        },
+        {
+          "upTo": "79228162514264337593543950335",
+          "cap": "0",
+          "delay": 86400,
+          "period": 0,
+          "methods": 1
+        }
+      ]
+    },
+    {
+      "token": "0x435a19fe6be6dbb5f81642f1f538a64d6ebbd4a6",
+      "tiers": [
+        {
+          "upTo": "100000000",
+          "cap": "300000000",
+          "delay": 0,
+          "period": 86400,
+          "methods": 1
+        },
+        {
+          "upTo": "1000000000",
+          "cap": "2000000000",
+          "delay": 0,
+          "period": 604800,
+          "methods": 1
+        },
+        {
+          "upTo": "79228162514264337593543950335",
+          "cap": "0",
+          "delay": 86400,
+          "period": 0,
+          "methods": 1
+        }
+      ]
+    }
+  ],
+  "constructorArgs": {
+    "0x435a19fe6be6dbb5f81642f1f538a64d6ebbd4a6": "0x00000000000000000000000000000000000000000000000000000000000000400000000000000000000000000000000000000000000000000000000000000080000000000000000000000000000000000000000000000000000000000000000e574156452054657374205553445400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000057455534454000000000000000000000000000000000000000000000000000000",
+    "0xe0116e9cad66d0e54ac089ae3231281cf35c1d03": "0x",
+    "0xa2915ea1c8f7614fa9b34b0f358cf8c1899f084b": "0x0000000000000000000000000000000071727de22e5e9d8baf0edac6f37da032000000000000000000000000e0116e9cad66d0e54ac089ae3231281cf35c1d03000000000000000000000000cedfb56113143d55b2358b8cfbb0deb5ad2f55a70000000000000000000000000000000000000000000000000000000000000000",
+    "0xf2364ca7bed5a3ad0bb87b30f3ccb5735908f036": "0x000000000000000000000000a2915ea1c8f7614fa9b34b0f358cf8c1899f084b",
+    "0x0398014e10e53b4c35ddb4cf3d8bf067394a152d": "0x0000000000000000000000000000000071727de22e5e9d8baf0edac6f37da0320000000000000000000000008e72f5174c4bfe6503ac457ba731eed64feccdbf"
+  }
+}
