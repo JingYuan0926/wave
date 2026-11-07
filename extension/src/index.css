@@ -5,23 +5,28 @@
 @theme {
   --font-sans: "Plus Jakarta Sans Variable", ui-sans-serif, system-ui, sans-serif;
 
-  --color-ink: #0a0a0a;
-  --color-ink-2: #333333;
-  --color-muted: #666666;
-  --color-line: #e5e5e5;
-  --color-surface: #f4f4f4;
-  --color-surface-2: #e8e8e8;
+  /* Cool neutrals. */
+  --color-ink: #14181f;
+  --color-ink-2: #3a414c;
+  --color-muted: #5f6773;
+  --color-line: #e5e7eb;
+  --color-page: #f9fafb;
+  --color-surface: #f1f3f6;
+  --color-surface-2: #e4e8ed;
+  --color-off: #cfd4da;
 
-  --color-wave: #dcdcdc;
-  --color-wave-soft: #f0f0f0;
-  --color-wave-mist: #f4f4f4;
-  --color-wave-deep: #0a0a0a;
+  /* The one accent colour: ocean blue. wave-deep passes AA with white text. */
+  --color-wave: #c0dcf3;
+  --color-wave-soft: #dcebf8;
+  --color-wave-mist: #eef5fc;
+  --color-wave-deep: #1f6fb2;
+  --color-wave-press: #185a91;
 
-  --color-positive: #0a0a0a;
+  --color-positive: #14181f;
   --color-danger: #b42318;
   --color-danger-soft: #fdecea;
-  --color-warn: #555555;
-  --color-warn-soft: #f0f0f0;
+  --color-warn: #8a5a14;
+  --color-warn-soft: #fbf1dc;
 
   --animate-sheet-in: sheet-in 340ms cubic-bezier(0.32, 0.72, 0, 1);
   --animate-fade-in: fade-in 200ms ease-out;

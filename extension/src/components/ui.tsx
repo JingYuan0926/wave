@@ -1,18 +1,22 @@
 import { useEffect, useId, useRef, type ReactNode } from "react";
-import { ChevronLeft, ChevronRight, Fingerprint, Globe, Nfc, ScanFace, X, type LucideIcon } from "lucide-react";
+import { ChevronLeft, ChevronRight, Fingerprint, Globe, KeyRound, Nfc, X, type LucideIcon } from "lucide-react";
 import type { MethodId, Token } from "../data";
 import usdcIcon from "../assets/usdc.png";
 import usdtIcon from "../assets/usdt.png";
 import { initials } from "../lib/format";
+import type { Row } from "../lib/wave/create";
 
 export const focusRing =
   "outline-none focus-visible:ring-2 focus-visible:ring-wave-deep focus-visible:ring-offset-2 focus-visible:ring-offset-white";
 
 export const METHOD_ICON: Record<MethodId, LucideIcon> = {
   worldid: Globe,
-  faceid: ScanFace,
+  faceid: Fingerprint,
   nfc: Nfc,
 };
+
+/** The icon of each kind of approval method, on the first-run page and the limits page. */
+export const KIND_ICON: Record<Row, LucideIcon> = { world: Globe, key: KeyRound, passkey: Fingerprint };
 
 export { Fingerprint };
 
@@ -29,7 +33,7 @@ type PillProps = {
 export function Pill({ children, onClick, tone = "white", icon: Icon, trailingIcon: Trailing }: PillProps) {
   const toneCls =
     tone === "accent"
-      ? "bg-wave-deep text-white shadow-[0_6px_20px_-6px_rgba(0,0,0,0.55)] hover:bg-[#262626]"
+      ? "bg-wave-deep text-white shadow-[0_6px_20px_-6px_rgba(0,0,0,0.55)] hover:bg-wave-press"
       : "bg-white text-ink border border-line shadow-[0_6px_20px_-8px_rgba(0,0,0,0.18)] hover:bg-surface";
   return (
     <button
@@ -58,8 +62,8 @@ export function PrimaryButton({
   tone?: "deep" | "accent" | "ghost";
 }) {
   const toneCls = {
-    deep: "bg-wave-deep text-white hover:bg-[#262626]", // darker shade of wave-deep for hover
-    accent: "bg-wave-deep text-white hover:bg-[#262626]",
+    deep: "bg-wave-deep text-white hover:bg-wave-press",
+    accent: "bg-wave-deep text-white hover:bg-wave-press",
     ghost: "bg-surface text-ink hover:bg-surface-2",
   }[tone];
   return (
@@ -91,7 +95,7 @@ export function IconButton({ label, icon: Icon, onClick }: { label: string; icon
 
 export function TopBar({ left, right }: { left?: ReactNode; right?: ReactNode }) {
   return (
-    <div className="sticky top-0 z-20 flex min-h-[84px] items-center justify-between gap-3 bg-linear-to-b from-white from-55% to-white/0 px-5 pb-4 pt-5">
+    <div className="sticky top-0 z-20 flex min-h-[84px] items-center justify-between gap-3 bg-linear-to-b from-page from-55% to-page/0 px-5 pb-4 pt-5">
       <div className="min-w-11">{left}</div>
       <div className="flex items-center gap-2">{right}</div>
     </div>
@@ -184,13 +188,12 @@ export function Avatar({ name, size = "md" }: { name: string; size?: "md" | "lg"
   );
 }
 
-export function MethodChip({ method, label }: { method: MethodId; label?: string }) {
-  const Icon = METHOD_ICON[method];
-  const names: Record<MethodId, string> = { worldid: "World ID", faceid: "Face ID", nfc: "NFC card" };
+export function MethodChip({ kind, label }: { kind: Row; label: string }) {
+  const Icon = KIND_ICON[kind];
   return (
     <span className="inline-flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-white px-2.5 text-[13px] font-semibold text-ink-2 ring-1 ring-line">
       <Icon className="size-3.5 shrink-0" aria-hidden />
-      {label ?? names[method]}
+      {label}
     </span>
   );
 }
@@ -198,7 +201,7 @@ export function MethodChip({ method, label }: { method: MethodId; label?: string
 /* ---------- Controls ---------- */
 
 // Shared off-state grey for switches and meters.
-const OFF_FILL = "bg-[#cccccc]";
+const OFF_FILL = "bg-off";
 
 export function Switch({ checked, onChange, label }: { checked: boolean; onChange: () => void; label: string }) {
   // Track 52×32, knob 24 with a 4px inset. The knob is pinned with left-1;

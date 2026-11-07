@@ -1,19 +1,20 @@
 import { useId, type ReactNode } from "react";
-import { ChevronRight, Clock, Globe, KeyRound, Nfc, Plus, ScanFace, type LucideIcon } from "lucide-react";
+import { ChevronRight, Clock, Fingerprint, Globe, KeyRound, Nfc, Plus, type LucideIcon } from "lucide-react";
 import type { CardDesign, MethodKind } from "../data";
 import { WaveMark, focusRing } from "./ui";
 
-// Bank-card palette: deep navy #00134D and slate grey #667A89.
+// Card palette: ocean blue, the one accent colour, and cool slate.
 export const CARD_DESIGNS: Record<CardDesign, [string, string, string]> = {
-  navy: ["#00134D", "#1d3270", "#667A89"],
-  slate: ["#2f3f4d", "#4d5f6d", "#667A89"],
-  midnight: ["#000a29", "#00134D", "#2a3d73"],
+  navy: ["#123f68", "#1f6fb2", "#4a93cf"],
+  slate: ["#1f2730", "#3a4553", "#6a7787"],
+  midnight: ["#0b2a47", "#123f68", "#1f6fb2"],
 };
 
 export const METHOD_KIND_ICON: Record<MethodKind, LucideIcon> = {
   worldid: Globe,
-  faceid: ScanFace,
-  passkey: KeyRound,
+  key: KeyRound,
+  faceid: Fingerprint,
+  passkey: Fingerprint,
   nfc: Nfc,
 };
 
@@ -38,7 +39,7 @@ export function CardArt({ design }: { design: CardDesign }) {
   );
 }
 
-/** What a card shows. Method cards and agent budget cards both use this. */
+/** What a card shows. Method cards and agent wallet cards both use this. */
 export type HolderCard = {
   id: string;
   design: CardDesign;
@@ -203,7 +204,7 @@ export function HolderChip({ icon: Icon, children, onClick }: { icon: LucideIcon
       <button
         type="button"
         onClick={onClick}
-        className={`inline-flex h-10 items-center gap-2 rounded-full bg-surface-2 px-3.5 text-[15px] font-semibold text-ink-2 hover:bg-[#dddddd] ${focusRing}`}
+        className={`inline-flex h-10 items-center gap-2 rounded-full bg-surface-2 px-3.5 text-[15px] font-semibold text-ink-2 hover:bg-off ${focusRing}`}
       >
         <Icon className="size-4" aria-hidden /> {children}
       </button>
