@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { Check, Fingerprint, Globe, KeyRound, RefreshCw, ServerOff, Timer, TriangleAlert, type LucideIcon } from "lucide-react";
+import { Atom, Check, Fingerprint, Globe, KeyRound, type LucideIcon, RefreshCw, ServerOff, Timer, TriangleAlert } from "lucide-react";
 import {
   CREATE_SIGNAL,
   api,
@@ -288,6 +288,15 @@ export function CreateWallet() {
               disabled={locked("key") || !canPasskey}
               owner={ownerRow === "key"}
               onToggle={() => toggle("key")}
+            />
+            {/* SAMPLE: no WAVE function yet. This method has no validator, so it stays off. */}
+            <TickRow
+              icon={Atom}
+              title="Quantum-safe key"
+              detail="Coming soon"
+              checked={false}
+              disabled
+              onToggle={() => undefined}
             />
           </div>
         </fieldset>
