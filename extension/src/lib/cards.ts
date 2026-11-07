@@ -2,15 +2,28 @@ import { Bot } from "lucide-react";
 import { METHOD_INFO, type Agent, type MethodCard } from "../data";
 import { METHOD_KIND_ICON, type HolderCard } from "../components/CardHolder";
 
+/** The real name of a method card, or the sample name of a preview card. */
+export const methodName = (c: MethodCard) => c.title ?? METHOD_INFO[c.kind].name;
+
+/** The state text of a queued method. A live method has none. */
+export function methodWait(c: MethodCard, now: number): string | undefined {
+  if (!c.queued) return undefined;
+  const left = c.activeAt - now;
+  if (!Number.isFinite(left)) return "Queued";
+  // The delay is over, but the method cannot approve until the action runs.
+  if (left <= 0) return "Ready to run";
+  const minutes = Math.ceil(left / 60_000);
+  return minutes < 60 ? `Active in ${minutes}m` : `Active in ${Math.ceil(minutes / 60)}h`;
+}
+
 export function methodToCard(c: MethodCard, now: number): HolderCard {
-  const hours = Math.max(0, Math.ceil((c.activeAt - now) / 3_600_000));
   return {
     id: c.id,
     design: c.design,
-    title: METHOD_INFO[c.kind].name,
-    subtitle: METHOD_INFO[c.kind].approves,
+    title: methodName(c),
+    subtitle: c.subtitle ?? METHOD_INFO[c.kind].approves,
     icon: METHOD_KIND_ICON[c.kind],
-    pendingLabel: hours > 0 ? `Active in ${hours}h` : undefined,
+    pendingLabel: methodWait(c, now),
   };
 }
 
@@ -19,8 +32,8 @@ export function agentToCard(a: Agent): HolderCard {
     id: a.id,
     design: a.design,
     title: a.name,
-    subtitle: `${a.limit} USDC a ${a.per}`,
+    subtitle: a.limit > 0 ? `${a.limit} USDC a ${a.per}` : "No limits set",
     icon: Bot,
-    pendingLabel: a.active ? undefined : "Paused",
+    pendingLabel: a.state === "active" ? undefined : a.state === "paused" ? "Paused" : "Revoked",
   };
 }

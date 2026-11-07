@@ -1,12 +1,13 @@
 import type { Token } from "../data";
 
+// Amounts round down, so a balance never shows more than it holds.
 export function fmtToken(amount: number, token: Token) {
-  const n = amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const n = amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2, roundingMode: "trunc" });
   return `${n} ${token}`;
 }
 
 export function fmtUsd(amount: number) {
-  return amount.toLocaleString("en-US", { style: "currency", currency: "USD" });
+  return amount.toLocaleString("en-US", { style: "currency", currency: "USD", roundingMode: "trunc" });
 }
 
 export function shortAddr(addr: string) {
@@ -15,6 +16,7 @@ export function shortAddr(addr: string) {
 
 export function fmtCountdown(ms: number) {
   if (ms <= 0) return "Ready";
+  if (!Number.isFinite(ms)) return "Waiting";
   const totalSec = Math.ceil(ms / 1000);
   const h = Math.floor(totalSec / 3600);
   const m = Math.floor((totalSec % 3600) / 60);
