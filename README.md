@@ -645,7 +645,7 @@ control of its agent wallets. An agent wallet has no World ID owner and no recov
 
 | Action | Who can approve | Delay |
 |---|---|---|
-| Create an agent wallet (it holds no funds yet) | The owner method | None |
+| Create an agent wallet (it holds no funds yet) | Any enrolled method | None |
 | Send funds to an agent wallet | The main wallet's spending rule for that amount | The delay that the rule names |
 | Revoke the agent key, or pause the agent | Any enrolled method | None |
 | Make the agent's limits stricter | Any enrolled method | None |
@@ -703,8 +703,8 @@ Because the onchain limit for one payment rises in that change, it needs the own
 1. The agent asks for a spend above its alone amount. The server stores the exact
    action (agent wallet, recipient, token, amount) and the limits at that moment, with a 3-minute
    expiry and a one-use approval ID. Nothing runs yet.
-2. `/agents` shows "Needs human approval" with the decoded action. The `send_payment` MCP tool
-   shows the same action and code in a terminal.
+2. The agent sheet in `/wallet` and the `/agents` page show the decoded action. The `send_payment`
+   MCP tool shows the same action and code in a terminal.
 3. WAVE starts the Device Authorization Grant (RFC 8628: a login on a second device, with no
    callback). It shows a user code, a link and a QR code. The server keeps the device code in
    memory and never shows it.
@@ -714,7 +714,7 @@ Because the onchain limit for one payment rises in that change, it needs the own
    `amr`, and the `(iss, sub)` pair that is linked to this agent wallet. Device tokens have no
    `nonce`.
 6. The World page does not show the action. So the action moves to "Authenticated, confirm the
-   payment", and `/agents` shows the exact action with Confirm and Reject.
+   payment", and the same two pages show the exact action with Confirm and Reject.
 7. Confirm uses the approval ID once, and it saves the send to disk before it starts. The backend
    then checks the limits again and sends the agent's transaction under the onchain rules.
 
@@ -734,8 +734,9 @@ and WAVE never sends it again. The owner must check the wallet activity.
 
 - The backend enforces this check, not the contract. The demo agent key is on the server, so you
   must trust the server.
-- Confirm needs the browser headers of the `/agents` page and a one-use token. The server gives
-  this token only to a request with those headers. It works once, for one action, for 30 seconds.
+- Confirm needs the browser headers of the `/agents` or `/wallet` page and a one-use token. The
+  server gives this token only to a request with those headers. It works once, for one action, for
+  30 seconds.
   No MCP tool calls these routes.
 - A program with shell access on the owner's computer can copy those headers, get a token and
   confirm an action after a person passes World ID. It cannot skip World ID, and it cannot change
@@ -1165,11 +1166,15 @@ A local MCP server gives Claude Code four tools. MCP (Model Context Protocol) le
 call local tools. `.mcp.json` starts `mcp/wave-server.ts` over stdio, so nothing is public. This
 server holds no secret. It calls the WAVE app on localhost, and the agent key stays in the app.
 
-1. Start the app with `npx next dev -p 3000`.
-2. Open `http://localhost:3000/agents` and press **Use with Claude Code** on an agent wallet. The
-   app saves this choice in `.wave/tool-agent-<network>.json`, so a restart keeps it.
+1. Start the app with `npx next dev -p 3000`. Start the phone UI with `npm run dev` in `extension/`.
+2. Open the phone UI at `http://localhost:3000/wallet`. Go to **Agents**, press an agent wallet, and
+   press **Use with Claude Code** in its sheet. The app saves this choice in
+   `.wave/tool-agent-<network>.json`, so a restart keeps it.
 3. Start Claude Code in the repository root and run `/mcp`. Approve the `wave` server.
 4. Ask for a payment, such as "send 1 USDC to 0x..., then 10 to 0x...".
+
+The same sheet funds the agent and sends a payment from the app, with no Claude Code. A send there
+uses the same limits and the same approval as `send_payment`. The `/agents` page still works.
 
 | Tool | What it does |
 | --- | --- |
@@ -1190,8 +1195,8 @@ server holds no secret. It calls the WAVE app on localhost, and the agent key st
 To approve a paused payment:
 
 1. Open the link on your phone, and enter the code in World ID.
-2. Open `/agents` on localhost and press **Confirm**. Use a browser on this computer, because the
-   page needs the Sec-Fetch headers that a browser sends on localhost.
+2. The first payment of an agent needs one **Confirm**, which links your World ID to the agent. After that, a scan by the same World ID sends the payment with no Confirm. World shows no payment, so read the action in the chat before you scan. Open `/wallet` on localhost, press the agent, and press **Confirm** for that first payment. Use a browser on this
+   computer, because the page needs the Sec-Fetch headers that a browser sends on localhost.
 
 The amount must be above the alone amount. A payment of exactly that amount runs alone.
 
