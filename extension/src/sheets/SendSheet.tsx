@@ -1,90 +1,136 @@
-import { useState } from "react";
-import { Info } from "lucide-react";
-import { METHOD_LABEL, tierFor, type MethodId, type Token } from "../data";
+import { useEffect, useState } from "react";
+import { TriangleAlert } from "lucide-react";
+import type { Token } from "../data";
 import { fmtToken, shortAddr } from "../lib/format";
-import { requestApproval } from "../lib/approvals";
-import { useStore } from "../store";
-import { Avatar, METHOD_ICON, PrimaryButton, Sheet, TokenIcon, focusRing } from "../components/ui";
-import { ApprovingView, DoneView } from "../components/Approving";
+import {
+  formatDuration,
+  leftToday,
+  parseTokenAmount,
+  plainAmount,
+  recipientProblem,
+  testToken,
+  tokenBalance,
+  type Address,
+  type TxAction,
+} from "../lib/wave";
+import { useSpendCheck, useStore, useWaveApproval } from "../store";
+import { PrimaryButton, Sheet, TokenIcon, focusRing } from "../components/ui";
+import { ApproveButtons, ApprovingView } from "../components/Approving";
 
-type Step = "form" | "review" | "approving" | "done";
+type Step = "form" | "review";
+
+export function Stop({ children }: { children: string }) {
+  return (
+    <div className="mt-3 flex gap-3 rounded-[20px] bg-danger-soft p-4" role="alert">
+      <TriangleAlert className="mt-0.5 size-5 shrink-0 text-danger" aria-hidden />
+      <p className="text-sm leading-snug text-ink">{children}</p>
+    </div>
+  );
+}
+
+/** The rows of a review step. */
+export function ReviewRows({ rows }: { rows: readonly (readonly [string, string])[] }) {
+  return (
+    <dl className="mt-5 divide-y divide-line rounded-[24px] bg-surface px-4">
+      {rows.map(([k, v]) => (
+        <div key={k} className="flex justify-between gap-4 py-3">
+          <dt className="shrink-0 text-[15px] text-muted">{k}</dt>
+          <dd className="text-right text-[15px] font-semibold">{v}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
 
 export function SendSheet({ onClose, recipientId }: { onClose: () => void; recipientId?: string }) {
-  const { state, addTx, addPending, debit } = useStore();
+  const { state } = useStore();
+  const { account, info, localWallet: wallet } = state;
   const main = state.wallet;
   const [step, setStep] = useState<Step>("form");
-  const [rid, setRid] = useState(recipientId ?? state.recipients[0]?.id);
+  // A recipient row fills in its address. Otherwise the person types one.
+  const [to, setTo] = useState(state.recipients.find((r) => r.id === recipientId)?.address ?? "");
   const [token, setToken] = useState<Token>("USDC");
   const [raw, setRaw] = useState("");
+  // The action stays fixed from the review step on, so a poll cannot change what the owner approves.
+  const [action, setAction] = useState<TxAction | null>(null);
+  const approval = useWaveApproval(action);
 
-  const recipient = state.recipients.find((r) => r.id === rid);
+  const address = to.trim();
+  const recipient = state.recipients.find((r) => r.address.toLowerCase() === address.toLowerCase());
+  const toProblem = address && wallet ? recipientProblem(address, wallet.address) : null;
+
+  // SAMPLE: no WAVE function yet. WAVE has no USDT token, so USDT fills the switch and never sends.
+  const isSample = token === "USDT";
+  const real = isSample ? undefined : testToken(info);
+
   const amount = Number.parseFloat(raw) || 0;
+  const parsed = real && raw ? parseTokenAmount(raw, real.decimals) : null;
+  const units = parsed?.value ? parsed.value : null;
   const balance = main.balances[token];
-  const overBalance = amount > balance;
-  const { tier, capSkipped } = tierFor(token, amount);
-  const method: MethodId = tier.method;
-  const canContinue = !!recipient && amount > 0 && !overBalance;
-  const MethodIcon = METHOD_ICON[method];
+  const overBalance = real && units !== null ? units > (account ? tokenBalance(account, real.address) : BigInt(0)) : amount > balance;
+  const amountError = parsed?.error ?? (overBalance ? `More than your balance of ${fmtToken(balance, token)}` : null);
 
-  const approve = async () => {
-    if (!recipient) return;
-    setStep("approving");
-    await requestApproval(method);
-    if (tier.delayHours > 0) {
-      addPending({
-        title: `Send ${fmtToken(amount, token)}`,
-        detail: `To ${recipient.name}`,
-        proposedBy: method,
-        endsAt: Date.now() + tier.delayHours * 3_600_000,
-        cancelBy: ["worldid", "faceid"],
-        transfer: { token, amount, to: recipient.name },
-      });
-    } else {
-      debit(token, amount);
-      addTx({
-        kind: "out",
-        title: `To ${recipient.name}`,
-        subtitle: `${METHOD_LABEL[method]} · Just now`,
-        amount,
-        token,
-        method,
-      });
-    }
-    setStep("done");
+  const { nameOf, rule, allowed, daily, stop, noMethod } = useSpendCheck(real, units);
+
+  const canContinue = !!address && !toProblem && !!rule && !overBalance && !stop && !noMethod;
+
+  // The first method builds while the owner reads, so Approve goes straight to the device or the scan.
+  const firstMethod = allowed[0]?.view.ref;
+  const { prebuild } = approval;
+  const firstKey = JSON.stringify(firstMethod);
+  useEffect(() => {
+    if (action && firstMethod) void prebuild(firstMethod);
+    // The key stands for the method, because each render makes a new object.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [action, firstKey, prebuild]);
+
+  const busy = approval.stage.name !== "idle";
+  const title = busy
+    ? approval.stage.name === "sign"
+      ? "Check and approve"
+      : "Send money"
+    : { form: "Send money", review: "Check and approve" }[step];
+
+  const toReview = () => {
+    if (!canContinue || !real || units === null) return;
+    setAction({ kind: "transfer", token: real.address, to: address as Address, amount: units.toString() });
+    setStep("review");
   };
 
-  const title = { form: "Send money", review: "Check and approve", approving: "Approving", done: "" }[step];
-
   return (
-    <Sheet title={title || (tier.delayHours > 0 ? "Scheduled" : "Sent")} onClose={onClose}>
-      {step === "form" && (
+    <Sheet title={title} onClose={onClose}>
+      {busy && <ApprovingView approval={approval} onDone={onClose} />}
+
+      {!busy && step === "form" && (
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            if (canContinue) setStep("review");
+            toReview();
           }}
         >
-          <fieldset>
-            <legend className="text-[15px] font-medium text-ink-2">To</legend>
-            <div className="no-scrollbar -mx-5 mt-3 flex gap-3 overflow-x-auto px-5 pb-1">
-              {state.recipients.map((r) => (
-                <button
-                  key={r.id}
-                  type="button"
-                  aria-pressed={r.id === rid}
-                  onClick={() => setRid(r.id)}
-                  className={`flex w-[72px] shrink-0 flex-col items-center gap-1.5 rounded-2xl p-1.5 ${focusRing}`}
-                >
-                  <span className={`rounded-full p-0.5 ring-2 transition ${r.id === rid ? "ring-wave-deep" : "ring-transparent"}`}>
-                    <Avatar name={r.name} />
-                  </span>
-                  <span className={`w-full truncate text-center text-xs ${r.id === rid ? "font-bold" : "text-ink-2"}`}>
-                    {r.name.split(" ")[0]}
-                  </span>
-                </button>
-              ))}
-            </div>
-          </fieldset>
+          <label htmlFor="send-to" className="text-[15px] font-medium text-ink-2">
+            To
+          </label>
+          <input
+            id="send-to"
+            type="text"
+            autoComplete="off"
+            spellCheck={false}
+            placeholder="Wallet address, 0x…"
+            value={to}
+            data-autofocus
+            aria-invalid={!!toProblem}
+            aria-describedby={toProblem ? "send-to-error" : undefined}
+            onChange={(e) => setTo(e.target.value)}
+            className={`mt-2 h-13 w-full rounded-2xl bg-surface px-4 font-mono text-[15px] outline-none ring-wave-deep placeholder:font-sans placeholder:text-muted focus-visible:ring-2 ${
+              toProblem ? "ring-2 ring-danger" : ""
+            }`}
+          />
+          {toProblem && (
+            <p id="send-to-error" className="mt-1.5 text-sm font-semibold text-danger">
+              {toProblem}
+            </p>
+          )}
 
           <div className="mt-5 rounded-[24px] bg-surface p-4">
             <div className="flex items-center justify-between">
@@ -113,8 +159,7 @@ export function SendSheet({ onClose, recipientId }: { onClose: () => void; recip
               autoComplete="off"
               placeholder="0"
               value={raw}
-              data-autofocus
-              aria-invalid={overBalance}
+              aria-invalid={!!amountError}
               aria-describedby="amount-help"
               onChange={(e) => {
                 const v = e.target.value.replace(",", ".");
@@ -122,21 +167,15 @@ export function SendSheet({ onClose, recipientId }: { onClose: () => void; recip
               }}
               className="mt-2 w-full bg-transparent text-[2.5rem] font-bold tabular-nums tracking-tight outline-none placeholder:text-[#b3b3b3]"
             />
-            <p id="amount-help" className={`text-sm ${overBalance ? "font-semibold text-danger" : "text-muted"}`}>
-              {overBalance ? `More than your balance of ${fmtToken(balance, token)}` : `Balance: ${fmtToken(balance, token)}`}
+            <p id="amount-help" className={`text-sm ${amountError ? "font-semibold text-danger" : "text-muted"}`}>
+              {amountError ?? `Balance: ${fmtToken(balance, token)}${daily && real ? ` · ${leftToday(daily, real)}` : ""}`}
             </p>
           </div>
 
-          {amount > 0 && !overBalance && (
-            <div className="mt-3 flex gap-3 rounded-[20px] bg-wave-mist p-4" aria-live="polite">
-              <MethodIcon className="mt-0.5 size-5 shrink-0 text-wave-deep" aria-hidden />
-              <p className="text-sm leading-snug text-ink-2">
-                <span className="font-semibold text-ink">{METHOD_LABEL[method]}</span> approves this amount.{" "}
-                {tier.delayHours > 0 ? `It runs after ${tier.delayHours} hours, and you can cancel it.` : "It runs at once."}
-                {capSkipped && " Your cap for smaller amounts is used up, so the next tier applies."}
-              </p>
-            </div>
-          )}
+          {isSample && <Stop>USDT is a sample. WAVE has no USDT token, so nothing can be sent.</Stop>}
+          {!isSample && !real && <Stop>WAVE has no test USDC on this network, so nothing can be sent.</Stop>}
+          {!amountError && stop && <Stop>{stop}</Stop>}
+          {!amountError && !stop && noMethod && <Stop>{noMethod}</Stop>}
 
           <div className="mt-5">
             <PrimaryButton type="submit" disabled={!canContinue}>
@@ -146,66 +185,38 @@ export function SendSheet({ onClose, recipientId }: { onClose: () => void; recip
         </form>
       )}
 
-      {step === "review" && recipient && (
+      {!busy && step === "review" && real && (
         <div>
-          <div className="flex items-center gap-3">
-            <Avatar name={recipient.name} size="lg" />
-            <div>
-              <p className="text-sm text-muted">You send</p>
-              <p className="text-3xl font-bold tabular-nums tracking-tight">{fmtToken(amount, token)}</p>
-            </div>
-          </div>
+          <p className="text-sm text-muted">{info?.gasSponsored ? "Total" : "You send"}</p>
+          <p className="text-3xl font-bold tabular-nums tracking-tight">
+            {plainAmount(units, real.decimals)} {token}
+          </p>
 
-          <dl className="mt-5 divide-y divide-line rounded-[24px] bg-surface px-4">
-            {(
-              [
-                ["To", `${recipient.name}`],
-                ["Address", recipient.handle ?? shortAddr(recipient.address)],
-                ["Network", "WAVE devnet"],
-                ["Approves with", METHOD_LABEL[method]],
-                ["Timing", tier.delayHours > 0 ? `After ${tier.delayHours}h · cancellable` : "At once"],
-              ] as const
-            ).map(([k, v]) => (
-              <div key={k} className="flex justify-between gap-4 py-3">
-                <dt className="text-[15px] text-muted">{k}</dt>
-                <dd className="text-right text-[15px] font-semibold">{v}</dd>
-              </div>
-            ))}
-          </dl>
+          <ReviewRows
+            rows={[
+              ["To", recipient ? `${recipient.name} · ${shortAddr(address)}` : shortAddr(address)],
+              ["Gas", info?.gasSponsored ? "0 (Sponsored)" : "Paid by this wallet"],
+              ["Methods required", allowed.map((choice) => nameOf(choice.view)).join(" or ")],
+              ...(rule?.delay ? ([["Timing", `After ${formatDuration(rule.delay).toLowerCase()} · cancellable`]] as const) : []),
+            ]}
+          />
 
-          {method === "worldid" && (
-            <div className="mt-3 flex gap-3 rounded-[20px] bg-warn-soft p-4">
-              <Info className="mt-0.5 size-5 shrink-0 text-warn" aria-hidden />
-              <p className="text-sm leading-snug text-ink-2">
-                World App won't show these details. Check them here before you approve.
-              </p>
-            </div>
-          )}
+          {/* A poll can change the balance or the rules while this step is open. */}
+          {!canContinue && <Stop>{stop ?? noMethod ?? amountError ?? "This send can no longer run. Edit it first."}</Stop>}
 
           <div className="mt-5 space-y-2">
-            <PrimaryButton onClick={approve}>
-              <MethodIcon className="size-5" aria-hidden />
-              Approve with {METHOD_LABEL[method]}
-            </PrimaryButton>
-            <PrimaryButton tone="ghost" onClick={() => setStep("form")}>
+            {canContinue && <ApproveButtons choices={allowed} onPick={(method) => void approval.approveNow(method)} />}
+            <PrimaryButton
+              tone="ghost"
+              onClick={() => {
+                setAction(null);
+                setStep("form");
+              }}
+            >
               Edit
             </PrimaryButton>
           </div>
         </div>
-      )}
-
-      {step === "approving" && <ApprovingView method={method} />}
-
-      {step === "done" && recipient && (
-        <DoneView
-          title={tier.delayHours > 0 ? "Transfer scheduled" : `${fmtToken(amount, token)} sent`}
-          body={
-            tier.delayHours > 0
-              ? `It runs in ${tier.delayHours} hours. You can cancel it from Payments until then.`
-              : `${recipient.name} has the money now.`
-          }
-          onDone={onClose}
-        />
       )}
     </Sheet>
   );
