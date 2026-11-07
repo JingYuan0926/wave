@@ -8,9 +8,14 @@
     "compile": "hardhat compile --no-tests",
     "test": "forge test",
     "deploy": "tsx scripts/deploy.ts",
-    "export-abi": "tsx scripts/export-abi.ts"
+    "export-abi": "tsx scripts/export-abi.ts",
+    "build:wc": "hardhat build --no-tests --config hardhat.whitechain.config.ts",
+    "test:wc": "FOUNDRY_CONFIG=foundry.whitechain.toml forge test",
+    "deploy:wc": "tsx scripts/deploy-whitechain.ts",
+    "verify:wc": "tsx scripts/verify-whitechain.ts"
   },
   "dependencies": {
+    "@account-abstraction/contracts": "0.7.0",
     "@openzeppelin/contracts": "5.6.1",
     "solady": "0.1.26"
   },
