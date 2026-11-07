@@ -25,5 +25,19 @@
   "skipDangerousModePermissionPrompt": true,
   "enabledMcpjsonServers": [
     "wave"
-  ]
+  ],
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/mcp/watch-approval.mjs\"",
+            "timeout": 185,
+            "statusMessage": "Watching for your approval\u2026"
+          }
+        ]
+      }
+    ]
+  }
 }
