@@ -103,7 +103,7 @@ export function requireLocal(request: Request): void {
 }
 
 /** Exact paths only. Vite serves other files below /wallet/, and those files get no power here. */
-const PAGE_PATHS = new Set(['/agents', '/wallet', '/wallet/'])
+const PAGE_PATHS = new Set(['/', '/agents', '/wallet', '/wallet/'])
 
 /**
  * For a step that only a WAVE page can take: /agents, or the phone UI at /wallet. A browser sets

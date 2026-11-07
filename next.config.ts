@@ -12,12 +12,17 @@ const nextConfig: NextConfig = {
   // These packages load wasm and workers at run time, so the bundler must leave them alone.
   serverExternalPackages: ["snarkjs", "circomlibjs", "ffjavascript"],
   async rewrites() {
-    return [
+    return {
+      // The phone wallet is the home page. This rule runs before the file for / in app/.
+      beforeFiles: [{ source: "/", destination: `${walletUi}/wallet/` }],
       // Vite serves the page only at /wallet/, with the slash. Next removes the slash from the
       // browser URL, so the first rule adds it back for Vite.
-      { source: "/wallet", destination: `${walletUi}/wallet/` },
-      { source: "/wallet/:path*", destination: `${walletUi}/wallet/:path*` },
-    ];
+      afterFiles: [
+        { source: "/wallet", destination: `${walletUi}/wallet/` },
+        { source: "/wallet/:path*", destination: `${walletUi}/wallet/:path*` },
+      ],
+      fallback: [],
+    };
   },
   experimental: {
     agentFeedback: true,
