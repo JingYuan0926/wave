@@ -4,22 +4,12 @@ import { useEffect, useState } from "react";
 import { Badge, Button, Card, Notice, SectionTitle, Skeleton } from "@/components/ui";
 import { useWallet } from "@/components/wallet-provider";
 import { ApiError, api } from "@/lib/api-client";
-import type { AgentPassAttempt, AgentPassReason, AgentPassStatusResponse } from "@/lib/api-types";
+import type { AgentPassAttempt, AgentPassStatusResponse } from "@/lib/api-types";
 import { shortHex } from "@/lib/ui/format";
+import { REASONS } from "@/lib/ui/rejections";
 
 const LAST_ATTEMPT_KEY = "wave.agentpass.last";
 const POLL_MS = 2000;
-
-export const REASONS: Record<AgentPassReason, string> = {
-  cancelled: "You cancelled at World ID. The action did not run.",
-  expired: "The approval window ended. The action did not run.",
-  identity_mismatch: "A different World ID signed in. This wallet is linked to another identity. The action did not run.",
-  unsupported_assurance: "World ID did not give an accepted Orb result for this attempt. The action did not run.",
-  invalid_token: "The response from World ID failed a check. The action did not run.",
-  replayed: "This approval was used before, or the action ended. It ran nothing.",
-  rate_limited: "World ID limits requests now. The action did not run. Wait, then ask for a new code.",
-  provider_error: "World ID or the chain failed, so this attempt is a refusal.",
-};
 
 function readAttemptId(): string | null {
   try {

@@ -1,6 +1,18 @@
-import type { Rejection } from "@/lib/api-types";
+import type { AgentPassReason, Rejection } from "@/lib/api-types";
 
 type Explanation = { title: string; detail: string };
+
+/** Why a World ID approval did not pass. */
+export const REASONS: Record<AgentPassReason, string> = {
+  cancelled: "You cancelled at World ID. The action did not run.",
+  expired: "The approval window ended. The action did not run.",
+  identity_mismatch: "A different World ID signed in. This wallet is linked to another identity. The action did not run.",
+  unsupported_assurance: "World ID did not give an accepted Orb result for this attempt. The action did not run.",
+  invalid_token: "The response from World ID failed a check. The action did not run.",
+  replayed: "This approval was used before, or the action ended. It ran nothing.",
+  rate_limited: "World ID limits requests now. The action did not run. Wait, then ask for a new code.",
+  provider_error: "World ID or the chain failed, so this attempt is a refusal.",
+};
 
 /** Plain text for each custom error and each validation failure. */
 const EXPLANATIONS: Record<string, Explanation> = {

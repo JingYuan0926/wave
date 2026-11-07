@@ -102,9 +102,13 @@ export function requireLocal(request: Request): void {
   }
 }
 
+/** Exact paths only. Vite serves other files below /wallet/, and those files get no power here. */
+const PAGE_PATHS = new Set(['/agents', '/wallet', '/wallet/'])
+
 /**
- * For a step that only the /agents page can take. A browser sets these headers itself, and code in
- * a web page cannot change them. So this refuses a tool or a script that uses the normal routes.
+ * For a step that only a WAVE page can take: /agents, or the phone UI at /wallet. A browser sets
+ * these headers itself, and code in a web page cannot change them. So this refuses a tool or a
+ * script that uses the normal routes.
  * It is not a wall against a program on this computer: such a program can copy the headers.
  * A browser sets Sec-Fetch headers only on a secure origin, so use localhost, not a LAN address.
  */
@@ -117,8 +121,8 @@ export function requirePage(request: Request): void {
     headers.get('sec-fetch-site') === 'same-origin' &&
     headers.get('sec-fetch-mode') === 'cors' &&
     headers.get('sec-fetch-dest') === 'empty' &&
-    referer?.pathname === '/agents'
-  if (!fromPage) throw new ApiFailure('PAGE_ONLY', 'Only the /agents page on localhost can do this.', 403)
+    PAGE_PATHS.has(referer?.pathname ?? '')
+  if (!fromPage) throw new ApiFailure('PAGE_ONLY', 'Only the /agents or /wallet page on localhost can do this.', 403)
 }
 
 export function queryParam(request: Request, name: string): string {

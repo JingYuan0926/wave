@@ -5,12 +5,11 @@ import Image from "next/image";
 import QRCode from "qrcode";
 import { useEffect, useState } from "react";
 import { DecodedLines } from "@/components/approve-flow";
-import { REASONS } from "@/components/settings/agent-pass-card";
 import { Badge, Button, Card, Notice, SectionTitle, Skeleton, focusRing } from "@/components/ui";
 import { api } from "@/lib/api-client";
 import type { AgentOperationView, AgentPassDevice } from "@/lib/api-types";
 import { formatCountdown, shortHex } from "@/lib/ui/format";
-import { explainAgentRejection } from "@/lib/ui/rejections";
+import { REASONS, explainAgentRejection } from "@/lib/ui/rejections";
 import { useNow } from "@/lib/ui/use-now";
 
 const RECENT = 5;
