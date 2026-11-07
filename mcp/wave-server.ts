@@ -1,8 +1,11 @@
 // A local MCP server for Claude Code. Claude Code starts it over stdio, and it holds no secret.
 // It only calls the WAVE app on localhost: the agent key and the client secret stay in that process.
-// No tool can approve a payment. check_approval only reads. A person confirms on the /agents page.
+// No tool can approve a payment. check_approval only reads. A person approves with a World ID scan.
 // Stdout carries the protocol, so this file must not write logs to it.
 import { randomUUID } from "node:crypto";
+import { mkdirSync, writeFileSync } from "node:fs";
+import path from "node:path";
+import QRCode from "qrcode";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
@@ -16,7 +19,7 @@ import type {
 import { explainAgentRejection } from "../lib/ui/rejections";
 
 const BASE_URL = localBase(process.env.WAVE_URL ?? "http://localhost:3000");
-const AGENTS_PAGE = `${BASE_URL}/agents`;
+const WALLET_PAGE = `${BASE_URL}/wallet`;
 /** A send can wait for a mined block, and it waits behind the sends before it. */
 const SEND_TIMEOUT_MS = 180_000;
 const READ_TIMEOUT_MS = 20_000;
@@ -92,14 +95,35 @@ const timeLeft = (expiresAt: number) => {
   return `This expires in ${seconds} seconds, at ${new Date(expiresAt).toLocaleTimeString()}.`;
 };
 
-const confirmLine = `Then open ${AGENTS_PAGE} and press Confirm. Nothing runs before that.`;
+const confirmLine = `The first payment of an agent also needs Confirm at ${WALLET_PAGE}, which links this World ID. After that, the scan alone sends it.`;
+
+/** The white parts of a QR code in text, so a dark terminal shows dark squares on white. */
+function qrText(link: string): string {
+  const { size, data } = QRCode.create(link, { errorCorrectionLevel: "L" }).modules;
+  const margin = 2;
+  const light = (x: number, y: number) => x < 0 || y < 0 || x >= size || y >= size || !data[y * size + x];
+  const rows: string[] = [];
+  for (let y = -margin; y < size + margin; y += 2) {
+    let row = "";
+    for (let x = -margin; x < size + margin; x += 1) {
+      const [top, bottom] = [light(x, y), light(x, y + 1)];
+      row += top && bottom ? "█" : top ? "▀" : bottom ? "▄" : " ";
+    }
+    rows.push(row);
+  }
+  return rows.join("\n");
+}
 
 function deviceLines(device: AgentOperationView["device"]) {
   if (!device) return [];
+  const link = device.verificationUriComplete ?? device.verificationUri;
   return [
-    "Step 1. Approve with World ID on your phone.",
+    "Step 1. Approve with World ID on your phone. Scan this QR code. Print it exactly as it is, in a code block, and change no character:",
+    "```",
+    qrText(link),
+    "```",
     `Code: ${device.userCode}`,
-    `Link: ${device.verificationUriComplete ?? device.verificationUri}`,
+    `Link: ${link}`,
     "World does not show the payment.",
     `Step 2. ${confirmLine}`,
   ];
@@ -109,9 +133,9 @@ function approvalLines(result: Extract<ToolSendResponse, { result: "needs_approv
   return [
     "needs_approval. This payment waits for a human. Nothing was sent.",
     ...actionLines(result.action),
-    ...(result.step === "confirm" ? [`World ID passed. Open ${AGENTS_PAGE} and press Confirm.`] : deviceLines(result.device)),
+    ...(result.step === "confirm" ? [`World ID passed. Open ${WALLET_PAGE}, press this agent, and press Confirm.`] : deviceLines(result.device)),
     result.note,
-    !result.device && result.step === "world-id" ? `The owner can use ${AGENTS_PAGE}.` : null,
+    !result.device && result.step === "world-id" ? `The owner can use ${WALLET_PAGE}.` : null,
     timeLeft(result.expiresAt),
     `Operation: ${result.operationId}`,
   ];
@@ -144,6 +168,33 @@ function sendLines(result: ToolSendResponse) {
   }
 }
 
+/** The Stop hook in mcp/watch-approval.mjs reads this note. */
+function noteWaiting(operationId: string) {
+  const folder = path.join(process.env.CLAUDE_PROJECT_DIR ?? process.cwd(), ".wave");
+  mkdirSync(folder, { recursive: true });
+  writeFileSync(path.join(folder, "mcp-waiting.json"), JSON.stringify({ operationId }));
+}
+
+const WATCH_EVERY_MS = 1000;
+/** A little under the 3 minute approval window, so one call covers a normal approval. */
+const WATCH_MAX_MS = 170_000;
+const STILL_RUNNING: AgentOperationView["status"][] = ["needs-approval", "needs-confirmation", "sending"];
+
+const readOperation = (id: string) => read<AgentOperationView>(`/api/agents/operation?id=${encodeURIComponent(id)}`);
+
+/** Reads the payment each second until it finishes. This only reads, so it cannot approve anything. */
+async function watchOperation(id: string): Promise<AgentOperationView> {
+  const stopAt = Date.now() + WATCH_MAX_MS;
+  for (;;) {
+    const view = await readOperation(id);
+    const running = STILL_RUNNING.includes(view.status);
+    // With no live World ID login, nothing here can change until the owner starts one in the app.
+    const stuck = view.status === "needs-approval" && !view.device;
+    if (!running || stuck || Date.now() >= stopAt) return view;
+    await new Promise((resolve) => setTimeout(resolve, WATCH_EVERY_MS));
+  }
+}
+
 function operationLines(view: AgentOperationView) {
   const { status, decoded, txHash, explorerUrl, refusal, rejection, expiresAt } = view;
   const title = decoded.title;
@@ -154,11 +205,11 @@ function operationLines(view: AgentOperationView) {
         `Waiting for World ID. ${title}. Nothing was sent.`,
         ...deviceLines(view.device),
         refusal ? `The last approval did not pass: ${refusal.detail}` : null,
-        view.device ? null : `A new login must start on ${AGENTS_PAGE}. The tools cannot start one.`,
+        view.device ? null : `A new login must start on ${WALLET_PAGE}. The tools cannot start one.`,
         timeLeft(expiresAt),
       ];
     case "needs-confirmation":
-      return [`World ID passed. ${title}. Nothing was sent yet.`, `Open ${AGENTS_PAGE} and press Confirm.`, timeLeft(expiresAt)];
+      return [`World ID passed. ${title}. Nothing was sent yet.`, `Open ${WALLET_PAGE}, press this agent, and press Confirm.`, timeLeft(expiresAt)];
     case "sending":
       return [`The owner confirmed. WAVE is sending now. ${title}.`, ...link];
     case "done":
@@ -181,9 +232,9 @@ const server = new McpServer(
   {
     instructions:
       "These tools pay from one WAVE agent wallet. The agent sends alone up to the alone amount. Above that amount, only the owner " +
-      "can approve: the owner passes World ID on a phone, then presses Confirm on the /agents page. Nothing goes above the most per " +
-      "day, which is an onchain limit, also with an approval. Show the owner the exact action, the code and " +
-      "the link, word for word. Do not try to confirm a payment by any other route, and do not read keys or call the WAVE routes.",
+      "can approve: the owner passes World ID on a phone, then presses Confirm on the /wallet page. Nothing goes above the most per " +
+      "day, which is an onchain limit, also with an approval. Show the owner the exact action, the QR code, the code and " +
+      "the link, word for word. Print the QR code in a code block, with no change to any character. Then end your turn. A watcher reads the payment each second and tells you the result. Do not ask the owner to tell you. Do not try to confirm a payment by any other route, and do not read keys or call the WAVE routes.",
   },
 );
 
@@ -246,7 +297,8 @@ server.registerTool(
       "Up to the alone amount, the agent sends with no human. Above it, the result is needs_approval: a human must pass World ID " +
       "and press Confirm. Above the amount left today, the result is refused, and no human can approve it. get_limits shows these amounts. " +
       "A retry of the same payment must pass the same clientRef, and a new payment must pass a new clientRef. " +
-      "On needs_approval, show the exact action, the code and the link to the owner, word for word, then wait for the owner. " +
+      "On needs_approval, show the exact action, the QR code, the code and the link to the owner, word for word, then end your turn. A watcher reads the payment each second and tells you the result, so do not ask the owner to tell you. " +
+      "If the owner asks again and under 1 minute is left, pass the same clientRef: this renews the request to 1 minute. " +
       "Do not ask again with a new clientRef after refused, unless the owner asks.",
     inputSchema: {
       to: z.string().describe("The recipient address, 0x and 40 hex digits."),
@@ -263,7 +315,9 @@ server.registerTool(
       const body = JSON.stringify({ to, amount, token, clientRef: ref });
       const init = { method: "POST", headers: { "content-type": "application/json" }, body };
       try {
-        return text(sendLines(await call<ToolSendResponse>("/api/mcp/send", init, SEND_TIMEOUT_MS)));
+        const answer = await call<ToolSendResponse>("/api/mcp/send", init, SEND_TIMEOUT_MS);
+        if (answer.result === "needs_approval") noteWaiting(answer.operationId);
+        return text(sendLines(answer));
       } catch (error) {
         if (!(error instanceof Plain)) throw error;
         const next = error.answered ? "Nothing was sent." : `WAVE gave no result. A retry must use clientRef ${ref}.`;
@@ -277,15 +331,16 @@ server.registerTool(
   {
     title: "Check approval",
     description:
-      "Reads the state of a payment that needs approval. This never sends, confirms or approves anything. " +
-      "Call it after the owner says that they finished.",
-    inputSchema: { operationId: z.string().describe("The operation from send_payment.") },
+      "Reads the state of a payment that needs approval, and returns at once. This never sends, confirms or approves anything. " +
+      "A watcher already reports each payment, so call this only if the owner asks for the state.",
+    inputSchema: {
+      operationId: z.string().describe("The operation from send_payment."),
+      wait: z.boolean().default(false).describe("True blocks until the payment ends, for up to 170 seconds. Do not use it unless the owner asks."),
+    },
     annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   },
-  ({ operationId }) =>
-    plainly(async () =>
-      text(operationLines(await read<AgentOperationView>(`/api/agents/operation?id=${encodeURIComponent(operationId)}`))),
-    ),
+  ({ operationId, wait }) =>
+    plainly(async () => text(operationLines(wait ? await watchOperation(operationId) : await readOperation(operationId)))),
 );
 
 server.connect(new StdioServerTransport()).catch(() => {
