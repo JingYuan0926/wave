@@ -5,6 +5,7 @@ import { useStore } from "../store";
 import type { Nav } from "../nav";
 import { Avatar, PageTitle, Pill, TopBar, focusRing } from "../components/ui";
 
+// SAMPLE: no WAVE function yet. WAVE has no address book. A row opens the real SendSheet.
 export function Recipients({ nav }: { nav: Nav }) {
   const { state } = useStore();
   const [q, setQ] = useState("");
@@ -67,7 +68,7 @@ export function Recipients({ nav }: { nav: Nav }) {
           <button
             type="button"
             onClick={() => nav.openSheet({ type: "addRecipient" })}
-            className={`mt-4 h-11 rounded-full bg-wave-soft px-5 text-[15px] font-semibold hover:bg-[#e2e2e2] ${focusRing}`}
+            className={`mt-4 h-11 rounded-full bg-wave-soft px-5 text-[15px] font-semibold hover:bg-wave ${focusRing}`}
           >
             Add recipient
           </button>
