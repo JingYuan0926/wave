@@ -1,9 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
   Bot,
-  ChartNoAxesColumn,
-  Eye,
-  EyeOff,
   Gauge,
   Hourglass,
   Landmark,
@@ -11,14 +8,13 @@ import {
   List,
   Plus,
   ScanFace,
-  ScanLine,
   Settings2,
   ShieldPlus,
   X,
+  Pencil,
 } from "lucide-react";
-import { METHOD_INFO } from "../data";
 import { fmtToken, fmtUsd } from "../lib/format";
-import { agentToCard, methodToCard } from "../lib/cards";
+import { agentToCard, methodName, methodToCard } from "../lib/cards";
 import { useNow, useStore } from "../store";
 import type { Nav } from "../nav";
 import { IconButton, ListRow, Pill, PrimaryButton, SectionHeader, SubHeading, TokenIcon, TopBar, focusRing } from "../components/ui";
@@ -26,17 +22,15 @@ import { TxRow } from "../components/TxRow";
 import { CardHolder, HolderChip, HolderRow, HolderTitle, cardCountLabel } from "../components/CardHolder";
 
 export function Home({ nav }: { nav: Nav }) {
-  const { state, toggleHide, dismissPromo } = useStore();
-  const now = useNow(60_000);
+  const { state, dismissPromo } = useStore();
   // Both tokens are dollar stablecoins, so the total is their sum.
   const total = state.wallet.balances.USDC + state.wallet.balances.USDT;
 
-  // Recovery needs two methods besides World ID.
-  const backups = state.cards.filter((c) => c.kind !== "worldid" && c.activeAt <= now).length;
-  const backupsPending = state.cards.filter((c) => c.kind !== "worldid" && c.activeAt > now).length;
-  const activeMethodNames = state.cards
-    .filter((c) => c.activeAt <= now)
-    .map((c) => METHOD_INFO[c.kind].name.replace(" passkey", ""));
+  // Recovery needs two device-bound methods besides the owner method.
+  const canRecover = state.cards.filter((c) => !c.owner && c.backup !== "synced");
+  const backups = canRecover.filter((c) => !c.queued).length;
+  const backupsPending = canRecover.filter((c) => c.queued).length;
+  const activeMethodNames = state.cards.filter((c) => !c.queued).map(methodName);
 
   return (
     <>
@@ -62,38 +56,28 @@ export function Home({ nav }: { nav: Nav }) {
         </p>
         <div className="mt-0.5 flex items-center gap-1">
           <p className="mr-2 text-[2rem] font-bold tabular-nums tracking-tight">
-            {state.hideBalance ? "••••••" : fmtUsd(total)}
+            {state.account ? fmtUsd(total) : "--"}
           </p>
-          <IconButton label={state.hideBalance ? "Show balance" : "Hide balance"} icon={state.hideBalance ? Eye : EyeOff} onClick={toggleHide} />
-          <IconButton label="Spending limits" icon={ChartNoAxesColumn} onClick={() => nav.openSub("limits")} />
+          <IconButton label="Edit limits" icon={Pencil} onClick={() => nav.openSub("limits")} />
         </div>
       </section>
 
       {/* Quick actions */}
-      <div className="no-scrollbar mt-4 flex gap-2 overflow-x-auto px-5 pb-1">
+      <div className="mt-4 grid grid-cols-2 gap-2 px-5 pb-1">
         <button
           type="button"
-          onClick={() => nav.openSheet({ type: "scan" })}
-          className={`inline-flex h-11 shrink-0 items-center gap-2 rounded-full bg-wave-deep px-4 text-base font-semibold text-white hover:bg-[#262626] active:scale-[0.97] ${focusRing}`}
+          onClick={() => nav.openSheet({ type: "receive" })}
+          className={`h-11 rounded-full bg-wave-deep px-4 text-base font-semibold text-white hover:bg-wave-press active:scale-[0.97] ${focusRing}`}
         >
-          <ScanLine className="size-[18px]" aria-hidden /> Scan
+          Receive
         </button>
-        {(
-          [
-            ["Send", () => nav.openSheet({ type: "send" })],
-            ["Add money", () => nav.openSheet({ type: "receive" })],
-            ["Request", () => nav.openSheet({ type: "receive" })],
-          ] as const
-        ).map(([label, fn]) => (
-          <button
-            key={label}
-            type="button"
-            onClick={fn}
-            className={`inline-flex h-11 shrink-0 items-center rounded-full bg-wave-soft px-4 text-base font-semibold hover:bg-[#e2e2e2] active:scale-[0.97] ${focusRing}`}
-          >
-            {label}
-          </button>
-        ))}
+        <button
+          type="button"
+          onClick={() => nav.openSheet({ type: "send" })}
+          className={`h-11 rounded-full bg-wave-soft px-4 text-base font-semibold hover:bg-wave active:scale-[0.97] ${focusRing}`}
+        >
+          Send
+        </button>
       </div>
 
       <HolderCarousel nav={nav} />
@@ -117,7 +101,7 @@ export function Home({ nav }: { nav: Nav }) {
                 Get recovery ready
               </h2>
               <p className="mt-1 text-[15px] leading-snug text-ink-2">
-                If you lose World ID, two other methods can recover your wallet. You have {backups + backupsPending}.
+                If you lose your owner method, two other methods can recover your wallet. You have {backups + backupsPending}.
               </p>
             </div>
           </div>
@@ -143,7 +127,9 @@ export function Home({ nav }: { nav: Nav }) {
           <span id="tx-title">Transactions</span>
         </SectionHeader>
         {state.transactions.length === 0 ? (
-          <p className="px-5 py-6 text-[15px] text-muted">No transactions yet. Add money to get started.</p>
+          <p className="px-5 py-6 text-[15px] text-muted">
+            {state.account ? "No transactions yet. Add money to get started." : "Your transactions have not loaded yet."}
+          </p>
         ) : (
           <ul>
             {state.transactions.slice(0, 4).map((tx) => (
@@ -225,7 +211,7 @@ function HolderCarousel({ nav }: { nav: Nav }) {
               {(["USDC", "USDT"] as const).map((t) => (
                 <li key={t}>
                   <HolderRow lead={<TokenIcon token={t} />} onClick={() => nav.openSub("account")}>
-                    {state.hideBalance ? "••••" : fmtToken(state.wallet.balances[t], t)}
+                    {state.account ? fmtToken(state.wallet.balances[t], t) : "--"}
                   </HolderRow>
                 </li>
               ))}
@@ -236,18 +222,30 @@ function HolderCarousel({ nav }: { nav: Nav }) {
           </CardHolder>
         </div>
 
-        {/* Holder 2: agent budgets. Each card is one agent's spending budget. */}
+        {/* Holder 2: agent wallets. Each card is one agent wallet. */}
         <div className="w-[86%] shrink-0 snap-start">
+          {agentCards.length === 0 ? (
+            <button
+              type="button"
+              onClick={() => nav.openSheet({ type: "addAgent" })}
+              className={`flex size-full flex-col items-center justify-center gap-3 rounded-[28px] border-2 border-dashed border-off text-ink-2 transition-colors hover:bg-surface ${focusRing}`}
+            >
+              <span className="grid size-14 place-items-center rounded-full bg-wave-soft text-wave-deep" aria-hidden>
+                <Plus className="size-6" />
+              </span>
+              <span className="text-[17px] font-bold">Create an agent wallet</span>
+            </button>
+          ) : (
           <CardHolder
-            ariaLabel="Agent budgets"
+            ariaLabel="Agent wallets"
             cards={agentCards}
-            frontLabel={cardCountLabel(agentCards.length, "budget")}
-            emptyLabel="Give an agent a budget"
+            frontLabel={cardCountLabel(agentCards.length, "wallet")}
+            emptyLabel="Create an agent wallet"
             newCardId={newCardId}
             onOpenCards={() => nav.openSheet({ type: "cards", holder: "agents" })}
             onCreate={() => nav.openSheet({ type: "addAgent" })}
           >
-            <HolderTitle onClick={() => nav.goTab("agents")}>Agent budgets</HolderTitle>
+            <HolderTitle onClick={() => nav.goTab("agents")}>Agent wallets</HolderTitle>
             <ul className="mt-3">
               <li>
                 <HolderRow
@@ -263,7 +261,7 @@ function HolderCarousel({ nav }: { nav: Nav }) {
               </li>
               <li>
                 <HolderRow lead={<TokenIcon token="USDC" />} onClick={() => nav.goTab("agents")}>
-                  {state.hideBalance ? "••••" : `${fmtToken(agentSpend, "USDC")} spent`}
+                  {`${fmtToken(agentSpend, "USDC")} spent`}
                 </HolderRow>
               </li>
             </ul>
@@ -271,6 +269,7 @@ function HolderCarousel({ nav }: { nav: Nav }) {
               Manage agents
             </HolderChip>
           </CardHolder>
+          )}
         </div>
       </div>
       <div className="mt-3 flex justify-center gap-1.5" aria-hidden>
