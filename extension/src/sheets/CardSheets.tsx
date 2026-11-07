@@ -1,52 +1,66 @@
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { Check, Plus } from "lucide-react";
-import { METHOD_INFO, type CardDesign } from "../data";
-import { requestApproval } from "../lib/approvals";
+import { METHOD_INFO, NFC_NOTE, type CardDesign } from "../data";
 import { agentToCard, methodToCard } from "../lib/cards";
-import { useNow, useStore } from "../store";
+import {
+  CONFIG_DELAY,
+  changeTiming,
+  enrolPasskey,
+  freePasskeySlot,
+  ownerName,
+  passkeyCardId,
+  passkeyErrorText,
+  passkeysSupported,
+  requireMethod,
+  savePasskey,
+  type MethodRef,
+} from "../lib/wave";
+import { useLateApproval, useNow, useStore } from "../store";
 import { CARD_DESIGNS, CardArt, CardFace, METHOD_KIND_ICON } from "../components/CardHolder";
-import { METHOD_ICON, PrimaryButton, Sheet, focusRing } from "../components/ui";
-import { ApprovingView, DoneView } from "../components/Approving";
+import { PrimaryButton, Sheet, focusRing } from "../components/ui";
+import { ApproveButtons, ApprovingView, NotConnectedView } from "../components/Approving";
 
 const DESIGN_NAMES: Record<CardDesign, string> = {
-  navy: "Navy",
+  navy: "Ocean",
   slate: "Slate",
   midnight: "Midnight",
 };
 
+// SAMPLE: no WAVE function yet. WAVE has no NFC card, so only the passkey row is real.
 type NewKind = "passkey" | "nfc";
-const ADDABLE: NewKind[] = ["passkey", "nfc"];
-const ADD_DELAY_MS = 48 * 3_600_000;
 
 /**
- * Adds an approval method as a new card in the wallet's holder.
- * Needs World ID and waits 48 hours, so the card arrives greyed out
- * with "Active in 48h".
+ * Adds an approval method as a new card in the wallet's holder. The same steps as
+ * components/settings/methods.tsx: the device makes the key, then the owner method approves it.
+ * A queued card reads "Active in", and the wait comes from this wallet.
  */
 export function CreateCardSheet({ kind: initialKind, onClose }: { kind?: NewKind; onClose: () => void }) {
-  const { state, addMethodCard, addPending, flagNewCard } = useStore();
-  const taken = new Set(state.cards.map((c) => c.kind));
-  const available = ADDABLE.filter((k) => !taken.has(k));
-
-  const [kind, setKind] = useState<NewKind | undefined>(
-    initialKind && available.includes(initialKind) ? initialKind : available[0],
-  );
+  const { state, flagNewCard } = useStore();
+  const { account, info, local, localWallet: wallet, offline } = state;
+  const [kind, setKind] = useState<NewKind>(initialKind ?? "passkey");
+  // SAMPLE: no WAVE function yet. WAVE stores no card design, so this changes only the preview.
   const [design, setDesign] = useState<CardDesign>("navy");
-  const [step, setStep] = useState<"form" | "approving" | "done">("form");
-  const createdId = useRef<string | null>(null);
+  // SAMPLE: no WAVE function yet. The NFC path ends at this step and sends nothing.
+  const [step, setStep] = useState<"form" | "not-connected">("form");
+  const [enrolling, setEnrolling] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const { approval, request, begin } = useLateApproval();
+  const { stage } = approval;
 
-  // Drop the new card into the holder once this sheet is out of the way.
-  const close = () => {
-    if (createdId.current) flagNewCard(createdId.current);
-    onClose();
-  };
+  const title = "Add an approval method";
+  if (!account || !wallet) {
+    return (
+      <Sheet title={title} onClose={onClose}>
+        <p className="text-[15px] leading-relaxed text-ink-2">Your wallet has not loaded yet. Try again in a moment.</p>
+      </Sheet>
+    );
+  }
 
-  if (!kind) {
+  const slot = freePasskeySlot(account.methods, account.pending);
+  if (!slot && kind === "passkey" && !request) {
     return (
       <Sheet title="All methods added" onClose={onClose}>
-        <p className="text-[15px] leading-relaxed text-ink-2">
-          Your holder has every approval method WAVE supports right now.
-        </p>
+        <p className="text-[15px] leading-relaxed text-ink-2">All three passkey slots are in use or queued.</p>
         <div className="mt-5">
           <PrimaryButton onClick={onClose}>Done</PrimaryButton>
         </div>
@@ -54,29 +68,51 @@ export function CreateCardSheet({ kind: initialKind, onClose }: { kind?: NewKind
     );
   }
 
-  const approve = async () => {
-    setStep("approving");
-    await requestApproval("worldid");
-    const activeAt = Date.now() + ADD_DELAY_MS;
-    const id = addMethodCard({ kind, design, activeAt });
-    createdId.current = id;
-    addPending({
-      title: `Add ${METHOD_INFO[kind].name}`,
-      detail: "New approval method",
-      proposedBy: "worldid",
-      endsAt: activeAt,
-      cancelBy: ["worldid", "faceid"],
-      cardId: id,
-    });
-    setStep("done");
+  const choices = requireMethod(account.methods, account.owner, info?.world);
+  const preview = methodToCard(
+    kind === "passkey"
+      ? { id: "preview", kind, design, activeAt: 0, title: `Passkey ${slot}`, subtitle: "Not active yet" }
+      : { id: "preview", kind, design, activeAt: 0 },
+    0,
+  );
+  const blocked = offline
+    ? "The chain does not answer. Nothing can be added now."
+    : !passkeysSupported()
+      ? "This browser cannot make a passkey."
+      : null;
+
+  const add = async (method: MethodRef) => {
+    if (!slot) return;
+    setEnrolling(true);
+    setError(null);
+    try {
+      // The WebAuthn user ID comes from this name. Two passkeys with one user ID on one device
+      // replace each other, so the name holds the slot.
+      const passkey = await enrolPasskey(`WAVE ${wallet.address.slice(0, 8)} passkey ${slot}`);
+      savePasskey(wallet.address, slot, { credentialId: passkey.credentialId });
+      begin({
+        action: { kind: "install-passkey", slot, publicKey: passkey.publicKey, backupEligible: passkey.backupEligible },
+        method,
+        onAccepted: () => flagNewCard(passkeyCardId(slot)),
+      });
+    } catch (cause) {
+      setError(`${passkeyErrorText(cause, "The device did not create a passkey.")} Nothing reached the chain.`);
+    } finally {
+      setEnrolling(false);
+    }
   };
 
-  const preview = methodToCard({ id: "preview", kind, design, activeAt: 0 }, 0);
-  const WorldIcon = METHOD_ICON.worldid;
-
   return (
-    <Sheet title={step === "done" ? "" : "Add an approval method"} onClose={close}>
-      {step === "form" && (
+    <Sheet title={stage.name === "done" ? "" : title} onClose={onClose}>
+      {request && stage.name !== "idle" && <ApprovingView approval={approval} onDone={onClose} />}
+
+      {request && stage.name === "idle" && (
+        <div className="space-y-2">
+          <ApproveButtons choices={choices} onPick={(method) => void approval.approveNow(method)} />
+        </div>
+      )}
+
+      {!request && step === "form" && (
         <>
           <div className="mx-auto w-[88%]">
             <CardFace card={preview} label="New card" />
@@ -86,7 +122,7 @@ export function CreateCardSheet({ kind: initialKind, onClose }: { kind?: NewKind
             <fieldset>
               <legend className="text-[15px] font-medium text-ink-2">Method</legend>
               <div className="mt-2 grid gap-2">
-                {available.map((k) => {
+                {(["passkey", "nfc"] as const).map((k) => {
                   const Icon = METHOD_KIND_ICON[k];
                   const selected = kind === k;
                   return (
@@ -103,9 +139,9 @@ export function CreateCardSheet({ kind: initialKind, onClose }: { kind?: NewKind
                         <Icon className="size-5" />
                       </span>
                       <span className="min-w-0 flex-1">
-                        <span className="block font-semibold">{METHOD_INFO[k].name}</span>
+                        <span className="block font-semibold">{k === "nfc" ? METHOD_INFO.nfc.name : "New passkey"}</span>
                         <span className="block text-sm text-muted">
-                          {k === "nfc" ? "Tap a signing card to approve" : "Face ID or Touch ID on another device"}
+                          {k === "nfc" ? NFC_NOTE : "Face ID, Touch ID or a security key"}
                         </span>
                       </span>
                       {selected && <Check className="size-5 text-wave-deep" aria-hidden />}
@@ -134,27 +170,40 @@ export function CreateCardSheet({ kind: initialKind, onClose }: { kind?: NewKind
               </div>
             </fieldset>
 
-            <p className="rounded-[20px] bg-warn-soft p-4 text-sm leading-snug text-ink-2">
-              Adding a method needs <span className="font-semibold text-ink">World ID</span> and waits{" "}
-              <span className="font-semibold text-ink">48 hours</span>. Your other methods can cancel it in that time.
-            </p>
+            {kind === "nfc" ? (
+              <PrimaryButton onClick={() => setStep("not-connected")}>Add NFC card</PrimaryButton>
+            ) : (
+              <>
+                <div className="space-y-2 rounded-[20px] bg-warn-soft p-4 text-sm leading-snug text-ink-2">
+                  <p>
+                    Adding a method needs <span className="font-semibold text-ink">{ownerName(account, { wallet, local, info })}</span>.{" "}
+                    {changeTiming(account.waitSeconds, CONFIG_DELAY)}
+                  </p>
+                  <p>Face ID and Touch ID often make a synced passkey. A synced passkey needs a limit and cannot run a recovery.</p>
+                </div>
 
-            <PrimaryButton onClick={approve}>
-              <WorldIcon className="size-5" aria-hidden /> Approve with World ID
-            </PrimaryButton>
+                {blocked && (
+                  <p role="alert" className="text-sm font-semibold leading-snug text-danger">
+                    {blocked}
+                  </p>
+                )}
+                {error && (
+                  <p role="alert" className="text-sm font-semibold leading-snug text-danger">
+                    {error}
+                  </p>
+                )}
+                {enrolling ? (
+                  <PrimaryButton disabled>Waiting for your device…</PrimaryButton>
+                ) : (
+                  !blocked && <ApproveButtons choices={choices} onPick={(method) => void add(method)} />
+                )}
+              </>
+            )}
           </div>
         </>
       )}
 
-      {step === "approving" && <ApprovingView method="worldid" />}
-
-      {step === "done" && (
-        <DoneView
-          title="Card added"
-          body={`${METHOD_INFO[kind].name} is in your holder. It can approve in 48 hours.`}
-          onDone={close}
-        />
-      )}
+      {!request && step === "not-connected" && <NotConnectedView what="An NFC card" onDone={onClose} />}
     </Sheet>
   );
 }
@@ -164,10 +213,13 @@ export function CardsSheet({
   holder,
   onClose,
   onAdd,
+  onPick,
 }: {
   holder: "methods" | "agents";
   onClose: () => void;
   onAdd: () => void;
+  /** Makes each card a button. */
+  onPick?: (id: string) => void;
 }) {
   const { state } = useStore();
   const now = useNow(60_000);
@@ -177,11 +229,22 @@ export function CardsSheet({
       : state.agents.map(agentToCard).reverse();
 
   return (
-    <Sheet title={holder === "methods" ? "Approval methods" : "Agent budgets"} onClose={onClose}>
+    <Sheet title={holder === "methods" ? "Approval methods" : "Agent wallets"} onClose={onClose}>
       <ul className="space-y-3">
         {cards.map((c) => (
           <li key={c.id}>
-            <CardFace card={c} />
+            {onPick ? (
+              <button
+                type="button"
+                onClick={() => onPick(c.id)}
+                aria-label={`Open ${c.title}`}
+                className={`block w-full rounded-[16px] text-left ${focusRing}`}
+              >
+                <CardFace card={c} />
+              </button>
+            ) : (
+              <CardFace card={c} />
+            )}
           </li>
         ))}
       </ul>
