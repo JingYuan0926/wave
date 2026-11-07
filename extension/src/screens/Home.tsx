@@ -20,6 +20,7 @@ import type { Nav } from "../nav";
 import { IconButton, ListRow, Pill, PrimaryButton, SectionHeader, SubHeading, TokenIcon, TopBar, focusRing } from "../components/ui";
 import { TxRow } from "../components/TxRow";
 import { CardHolder, HolderChip, HolderRow, HolderTitle, cardCountLabel } from "../components/CardHolder";
+import { WhitechainLine } from "../components/WhitechainSwitch";
 
 export function Home({ nav }: { nav: Nav }) {
   const { state, dismissPromo } = useStore();
@@ -60,6 +61,7 @@ export function Home({ nav }: { nav: Nav }) {
           </p>
           <IconButton label="Edit limits" icon={Pencil} onClick={() => nav.openSub("limits")} />
         </div>
+        <WhitechainLine />
       </section>
 
       {/* Quick actions */}

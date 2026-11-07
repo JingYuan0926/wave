@@ -16,6 +16,8 @@ import {
 import { useSpendCheck, useStore, useWaveApproval } from "../store";
 import { PrimaryButton, Sheet, TokenIcon, focusRing } from "../components/ui";
 import { ApproveButtons, ApprovingView } from "../components/Approving";
+import { useWhitechainPayments } from "../lib/wc/switch";
+import { WhitechainSendSheet } from "./WhitechainSendSheet";
 
 type Step = "form" | "review";
 
@@ -42,7 +44,15 @@ export function ReviewRows({ rows }: { rows: readonly (readonly [string, string]
   );
 }
 
-export function SendSheet({ onClose, recipientId }: { onClose: () => void; recipientId?: string }) {
+type SendSheetProps = { onClose: () => void; recipientId?: string };
+
+/** The Whitechain switch picks the sheet here, so the normal send below stays as it was. */
+export function SendSheet(props: SendSheetProps) {
+  const { mode } = useWhitechainPayments();
+  return mode === "off" ? <NormalSendSheet {...props} /> : <WhitechainSendSheet {...props} />;
+}
+
+function NormalSendSheet({ onClose, recipientId }: SendSheetProps) {
   const { state } = useStore();
   const { account, info, localWallet: wallet } = state;
   const main = state.wallet;

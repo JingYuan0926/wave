@@ -46,6 +46,7 @@ import type { Nav } from "../nav";
 import { BackButton, MethodChip, Meter, PageTitle, PrimaryButton, TopBar, focusRing } from "../components/ui";
 import { METHOD_KIND_ICON } from "../components/CardHolder";
 import { LimitBox, LimitFields, PerDayField } from "../components/LimitFields";
+import { WhitechainSwitchRow } from "../components/WhitechainSwitch";
 
 function NotLoaded({ children }: { children: string }) {
   return <p className="mx-5 mt-5 rounded-[24px] bg-surface p-4 text-sm leading-snug text-ink-2">{children}</p>;
@@ -503,6 +504,8 @@ export function AccountDetails({ nav }: { nav: Nav }) {
           </div>
         ))}
       </dl>
+
+      <WhitechainSwitchRow />
 
       <StartOver onDone={nav.back} />
     </>
