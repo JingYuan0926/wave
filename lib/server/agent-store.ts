@@ -96,7 +96,7 @@ export const saveOpenSends = (sends: OpenSend[]) => writeJson(sendsFile(), sends
 
 const toolAgentFile = () => path.join(process.cwd(), '.wave', `tool-agent-${NETWORK}.json`)
 
-/** The agent wallet that the MCP tools use. Null until a person sets one on the /agents page. */
+/** The agent wallet that the MCP tools use. Null until a person sets one on /agents or /wallet. */
 export function readToolAgent(): Address | null {
   try {
     const { agent } = JSON.parse(readFileSync(/*turbopackIgnore: true*/ toolAgentFile(), 'utf8')) as { agent?: Address }

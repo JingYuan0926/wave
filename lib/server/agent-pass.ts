@@ -679,6 +679,12 @@ async function pollDevice(attempt: Attempt, config: Config, doc: Discovery, devi
 }
 
 /** Starts a device attempt for one action and gives the attempt ID. The caller shows the handoff. */
+/** Moves the end of a live device login. The device code lives for 20 minutes, which is longer than a request can. */
+export function renewDeviceAttempt(id: string, expiresAt: number): void {
+  const attempt = store.byId.get(id)
+  if (attempt?.stage === 'pending') attempt.expiresAt = Math.max(attempt.expiresAt, expiresAt)
+}
+
 export async function startDeviceAttempt(wallet: Address, guarded: GuardedAction): Promise<string> {
   const { config, doc } = await readProvider()
   if (!doc.device_authorization_endpoint) {

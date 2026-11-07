@@ -1,6 +1,6 @@
 // What the local MCP tools can do: read one agent wallet and ask for a payment. Server side only.
 // The tools run in another process and reach this code through localhost. The agent key and the
-// client secret stay here. Nothing in this file can approve: only the /agents page can confirm.
+// client secret stay here. Nothing in this file can approve: only a person on a WAVE page can confirm.
 import { randomUUID } from 'node:crypto'
 import type { Address } from 'viem'
 import type {
@@ -26,7 +26,7 @@ import {
   sendRefOf,
   type SendRef,
 } from './agent-store'
-import { readAgent, readOperation, requestSpend, startDeviceApproval } from './agents'
+import { readAgent, readOperation, renewOperation, requestSpend, startDeviceApproval } from './agents'
 import { tokensOf } from './decode'
 import { ApiFailure, asAddress, deployment } from './http'
 import { txStatus } from './send'
@@ -34,7 +34,7 @@ import { txStatus } from './send'
 const DEFAULT_TOKEN = 'tUSDC'
 const CLIENT_REF = /^[\w.:-]{1,80}$/
 
-const UNKNOWN_RESULT = 'WAVE cannot tell if this ran. It will not send it again. Check the wallet activity on /agents.'
+const UNKNOWN_RESULT = 'WAVE cannot tell if this ran. It will not send it again. Check the agent in /wallet.'
 const NO_OPERATION = 'The server restarted, so it lost this request. It will not send it again. Check the wallet activity.'
 
 type Payment = { clientRef: string; payment: string; repeat: boolean }
@@ -48,7 +48,7 @@ const running = ((globalThis as typeof globalThis & {
 function toolAgent(): Address {
   const agent = readToolAgent()
   if (!agent) {
-    throw new ApiFailure('NO_TOOL_AGENT', 'No agent wallet is set. Open /agents and press "Use with Claude Code".', 409)
+    throw new ApiFailure('NO_TOOL_AGENT', 'No agent wallet is set. Open /wallet, press an agent, and press "Use with Claude Code".', 409)
   }
   return agent
 }
@@ -126,7 +126,7 @@ function operationResult(view: AgentOperationView, base: Payment, note: string |
         expiresAt,
         step: status === 'needs-approval' ? 'world-id' : 'confirm',
         device,
-        note: device || status === 'needs-confirmation' ? null : (note ?? 'No World ID login is open. Start one on /agents.'),
+        note: device || status === 'needs-confirmation' ? null : (note ?? 'No World ID login is open. Start one on /wallet.'),
       }
     case 'done':
       if (!txHash || !explorerUrl) return { ...base, result: 'unknown', reason: UNKNOWN_RESULT, txHash, explorerUrl }
@@ -169,7 +169,7 @@ async function withLogin(operation: AgentOperationView, base: Payment): Promise<
     return operationResult(await startDeviceApproval(operation.id), base, null)
   } catch (error) {
     if (!(error instanceof ApiFailure)) throw error
-    return operationResult(readOperation(operation.id), base, `${error.message} Try again on /agents.`)
+    return operationResult(readOperation(operation.id), base, `${error.message} Try again on /wallet.`)
   }
 }
 
@@ -236,7 +236,10 @@ export function sendFromTool(body: ToolSendRequest): Promise<ToolResult> {
   const active = running.get(clientRef)
   if (active) return active.result
   const saved = sendRefOf(clientRef)
-  if (saved) return Promise.resolve(replay(saved, { ...base, repeat: true }))
+  if (saved) {
+    if (saved.operationId) renewOperation(saved.operationId)
+    return Promise.resolve(replay(saved, { ...base, repeat: true }))
+  }
 
   const result = runPayment(agent, token, to, amount, fingerprint, base).finally(() => running.delete(clientRef))
   running.set(clientRef, { fingerprint, result })

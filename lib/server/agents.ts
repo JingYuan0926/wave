@@ -27,7 +27,7 @@ import { plainAmount } from '../ui/format'
 import { WaveAccountAbi } from '../wave-abi'
 import { readBalances, readRules } from './account-view'
 import { agentKeyAccount } from './agent-key'
-import { agentPassConfigured, cancelAttempt, deviceHandoff, startDeviceAttempt } from './agent-pass'
+import { agentPassConfigured, cancelAttempt, deviceHandoff, renewDeviceAttempt, startDeviceAttempt } from './agent-pass'
 import {
   askAboveList,
   askAboveOf,
@@ -49,9 +49,13 @@ import { sponsorView } from './sponsor'
 
 /**
  * The whole window: the World ID login and the confirmation. It does not move when a person tries
- * again or when a client reads the status.
+ * again or when a client reads the status. Only a repeat of the same payment can renew it.
  */
 const OPERATION_MS = 3 * 60_000
+/** A repeat of the same payment leaves at least this much time, so the owner has time to scan. */
+const RENEWED_MS = 60_000
+/** No renewal goes past this, so an old request cannot stay open for ever. */
+const OPERATION_MAX_MS = 10 * 60_000
 /** Each ended operation stays visible. This cap keeps the memory small. */
 const MAX_OPERATIONS = 200
 /** The page asks for the token at the click on Confirm and uses it at once. */
@@ -74,6 +78,8 @@ type Operation = {
   action: Action | null
   decoded: DecodedAction
   expiresAt: number
+  /** The latest that a renewal can move expiresAt to. */
+  latestExpiry: number
   /** One use. A confirmation clears it, before the send starts. */
   approvalId: string | null
   status: AgentOperationStatus
@@ -105,6 +111,7 @@ const operations: Map<string, Operation> = (shared.__waveAgentOperations ??= new
       ...send,
       action: null,
       approvalId: null,
+      latestExpiry: send.expiresAt,
       status: 'unknown',
       refusal: null,
       rejection: null,
@@ -145,6 +152,7 @@ function addOperation(agent: Address, master: Address, action: Action, decoded: 
     action,
     decoded,
     expiresAt: Date.now() + OPERATION_MS,
+    latestExpiry: Date.now() + OPERATION_MAX_MS,
     approvalId: randomUUID(),
     status: 'needs-approval',
     txHash: null,
@@ -166,6 +174,17 @@ function expireIfDue(operation: Operation) {
     operation.status = 'expired'
     operation.approvalId = null
   }
+}
+
+/** A repeat of the same payment. A person must still approve, so this gives the agent no new power. */
+export function renewOperation(id: string): void {
+  const operation = operations.get(id)
+  if (!operation) return
+  expireIfDue(operation)
+  if (operation.status !== 'needs-approval' && operation.status !== 'needs-confirmation') return
+  operation.expiresAt = Math.max(operation.expiresAt, Math.min(Date.now() + RENEWED_MS, operation.latestExpiry))
+  // The live login must last as long as the request, or the code on the phone ends first.
+  if (operation.attemptId) renewDeviceAttempt(operation.attemptId, operation.expiresAt)
 }
 
 function toView(operation: Operation): AgentOperationView {
@@ -486,6 +505,14 @@ async function beginDevice(operation: Operation) {
       if (operation.status !== 'needs-approval') return false
       operation.identity = identity
       operation.status = 'needs-confirmation'
+      // The linked person scanned, so that scan is the approval. A first scan must link by Confirm:
+      // otherwise anyone who gets the code could become the approver of this agent.
+      const linked = identityOf(operation.agent)
+      if (linked?.iss === identity.iss && linked.sub === identity.sub) {
+        runApproved(operation).catch((error) => {
+          console.error('[agents] the approved send failed:', error instanceof Error ? error.name : 'unknown')
+        })
+      }
       return true
     },
     refused: (reason: AgentPassReason, detail: string) => {
@@ -527,7 +554,7 @@ function spendConfirmToken(operation: Operation, token: unknown) {
     stored !== null &&
     Date.now() <= stored.until &&
     timingSafeEqual(stored.hash, hashToken(token))
-  if (!valid) throw new ApiFailure('CONFIRM_TOKEN_INVALID', 'Press Confirm on the /agents page.', 403)
+  if (!valid) throw new ApiFailure('CONFIRM_TOKEN_INVALID', 'Press Confirm in the WAVE wallet.', 403)
 }
 
 async function confirmOperation(operation: Operation, token: unknown) {
@@ -535,6 +562,13 @@ async function confirmOperation(operation: Operation, token: unknown) {
   const { action, agent, identity, approvalId } = operation
   if (operation.status !== 'needs-confirmation' || !action || !identity || !approvalId) throw closed()
   spendConfirmToken(operation, token)
+  await runApproved(operation)
+}
+
+/** Uses the approval once. Confirm or a scan by the linked person starts this. */
+async function runApproved(operation: Operation) {
+  const { action, agent, identity, approvalId } = operation
+  if (operation.status !== 'needs-confirmation' || !action || !identity || !approvalId) throw closed()
 
   // No `await` comes before the send record is on disk, so only one request can use the approval.
   operation.approvalId = null
@@ -561,7 +595,7 @@ async function confirmOperation(operation: Operation, token: unknown) {
   }
 }
 
-/** The answer of a person on /agents. A repeat finds the action closed, so it cannot send twice. */
+/** The answer of a person on /agents or /wallet. A repeat finds the action closed, so it cannot send twice. */
 export async function decideOperation(body: AgentDecisionRequest): Promise<AgentOperationView> {
   const operation = findOperation(body.operationId)
   if (body.decision === 'reject') rejectOperation(operation)
