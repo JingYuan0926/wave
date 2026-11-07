@@ -131,8 +131,8 @@ export const api = {
   runScheduled: (body: RunScheduledRequest) =>
     request<RunScheduledResponse>("POST", API_ROUTES.runScheduled, body),
 
-  faucet: (address: Address) =>
-    request<FaucetResponse>("POST", API_ROUTES.faucet, { address }),
+  faucet: (address: Address, amount?: string) =>
+    request<FaucetResponse>("POST", API_ROUTES.faucet, { address, amount }),
 
   rootPublish: (root?: Hex) =>
     request<RootPublishResponse>("POST", API_ROUTES.rootPublish, { root }),

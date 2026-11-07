@@ -2,7 +2,7 @@ import { encodeFunctionData, type Hex } from "viem";
 import type { FaucetRequest, FaucetResponse } from "@/lib/api-types";
 import { ETH_TOKEN } from "@/lib/api-types";
 import { LEGACY_TX, devWallet, publicClient, sponsorOf } from "@/lib/chain";
-import { ApiFailure, asAddress, deployment, readBody, requireLocal, route } from "@/lib/server/http";
+import { ApiFailure, asAddress, asBaseUnits, deployment, readBody, requireLocal, route } from "@/lib/server/http";
 import { withDevKey } from "@/lib/server/roots";
 import { TestUSDCAbi } from "@/lib/wave-abi";
 
@@ -27,7 +27,7 @@ async function mined(hash: Hex): Promise<Hex> {
 }
 
 /** A sponsored wallet needs no ETH, so it gets test USDC only. */
-async function fund(address: `0x${string}`, testUsdc: `0x${string}`, withEth: boolean): Promise<Hex[]> {
+async function fund(address: `0x${string}`, testUsdc: `0x${string}`, withEth: boolean, usdc: bigint): Promise<Hex[]> {
   return withDevKey(async () => {
     const hashes: Hex[] = [];
     if (withEth) {
@@ -39,13 +39,13 @@ async function fund(address: `0x${string}`, testUsdc: `0x${string}`, withEth: bo
       });
       hashes.push(await mined(eth));
     }
-    const usdc = await devWallet.sendTransaction({
+    const mint = await devWallet.sendTransaction({
       to: testUsdc,
-      data: encodeFunctionData({ abi: TestUSDCAbi, functionName: "mint", args: [address, USDC_AMOUNT] }),
+      data: encodeFunctionData({ abi: TestUSDCAbi, functionName: "mint", args: [address, usdc] }),
       gas: MINT_GAS,
       ...LEGACY_TX,
     });
-    hashes.push(await mined(usdc));
+    hashes.push(await mined(mint));
     return hashes;
   });
 }
@@ -54,6 +54,7 @@ export const POST = route(async (request): Promise<FaucetResponse> => {
   requireLocal(request);
   const body = await readBody<FaucetRequest>(request);
   const address = asAddress(body.address);
+  const amount = body.amount === undefined ? USDC_AMOUNT : asBaseUnits(body.amount, "amount", USDC_AMOUNT);
   const d = deployment();
 
   if (state.busy) throw new ApiFailure("FAUCET_BUSY", "The faucet is busy. Try again soon.", 429);
@@ -70,13 +71,13 @@ export const POST = route(async (request): Promise<FaucetResponse> => {
       throw new ApiFailure("FAUCET_EMPTY", "The faucet keeps its last ETH for root publishing.", 503);
     }
     const withEth = sponsorOf(d) === null;
-    const txHashes = await fund(address, d.testUsdc, withEth);
+    const txHashes = await fund(address, d.testUsdc, withEth, amount);
     state.lastAt.set(key, Date.now());
     return {
       txHashes,
       funded: [
         ...(withEth ? [{ token: ETH_TOKEN, amount: ETH_AMOUNT.toString() }] : []),
-        { token: d.testUsdc, amount: USDC_AMOUNT.toString() },
+        { token: d.testUsdc, amount: amount.toString() },
       ],
     };
   } finally {

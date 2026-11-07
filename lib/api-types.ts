@@ -346,7 +346,11 @@ export type RunScheduledResponse = { txHash: Hex };
 
 // POST /api/faucet
 
-export type FaucetRequest = { address: Address };
+export type FaucetRequest = {
+  address: Address;
+  /** Test USDC in base units, up to the normal faucet amount. With none, the faucet gives the normal amount. */
+  amount?: string;
+};
 
 export type FaucetResponse = {
   /** One transaction hash per token funded. */
@@ -733,7 +737,7 @@ export type AgentSpendResponse =
   | { result: "needs-approval"; operation: AgentOperationView }
   | { result: "rejected"; rejection: Rejection };
 
-/** The answer of a person on the /agents page. Only Confirm sends, so only Confirm needs the token. */
+/** The answer of a person on /agents or /wallet. Only Confirm sends, so only Confirm needs the token. */
 export type AgentDecisionRequest =
   | { operationId: string; decision: "confirm"; confirmToken: string }
   | { operationId: string; decision: "reject" };
@@ -811,7 +815,7 @@ export type ToolSendResponse = {
       expiresAt: number;
       /** "world-id": the owner must log in. "confirm": the owner must press Confirm. */
       step: "world-id" | "confirm";
-      /** The code and the link. Null if a new attempt must start on the /agents page. */
+      /** The code and the link. Null if a new attempt must start on /agents or /wallet. */
       device: AgentPassDevice | null;
       /** Why no code is here, in plain text. */
       note: string | null;
